@@ -56,12 +56,12 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 COPY --from=sysroot-glibc-base /sysroots/glibc/base /sysroots/glibc/llvm
 
 WORKDIR /sources/llvm-project
-RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch
-RUN cmake -S llvm -B build -G Ninja -C /configs/llvm-glibc-stage1.cmake -C /configs/llvm-glibc-base.cmake
-RUN cmake --build build --target runtimes
-RUN cmake --build build --target install-runtimes
-RUN cmake --build build --target stage2-distribution
-RUN cmake --build build --target stage2-install-distribution
+RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
+    cmake -S llvm -B build -G Ninja -C /configs/llvm-glibc-stage1.cmake -C /configs/llvm-glibc-base.cmake && \
+    cmake --build build --target runtimes && \
+    cmake --build build --target install-runtimes && \
+    cmake --build build --target stage2-distribution && \
+    cmake --build build --target stage2-install-distribution
 
 
 ####
@@ -83,14 +83,14 @@ RUN ln -s lib usr/lib64
 RUN echo "/toolchain/usr/lib/x86_64-unknown-linux-musl\n/toolchain/usr/lib" > etc/ld-musl-x86_64.path
 
 WORKDIR /sources/linux
-RUN make HOSTCFLAGS="--sysroot=/sysroots/glibc/llvm" HOSTLDFLAGS="--sysroot=/sysroots/glibc/llvm" LLVM=1 -j64 headers
-RUN find usr/include -type f ! -name '*.h' -delete
-RUN cp -rv usr/include ${SYSROOT}/usr/include
+RUN make HOSTCFLAGS="--sysroot=/sysroots/glibc/llvm" HOSTLDFLAGS="--sysroot=/sysroots/glibc/llvm" LLVM=1 -j64 headers && \
+    find usr/include -type f ! -name '*.h' -delete && \
+    cp -rv usr/include ${SYSROOT}/usr/include
 
 WORKDIR /sources/musl
-RUN ./configure CC="clang --sysroot=/sysroots/glibc/llvm" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="${SYSROOT}/usr"
-RUN make -j64
-RUN make install
+RUN ./configure CC="clang --sysroot=/sysroots/glibc/llvm" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="${SYSROOT}/usr" && \
+    make -j64 && \
+    make install
 RUN ln -sf libc.so "${SYSROOT}/usr/lib/ld-musl-x86_64.so.1"
 RUN ln -sf ../lib/libc.so "${SYSROOT}/usr/bin/ldd"
 RUN echo "/toolchain/lib/x86_64-unknown-linux-musl" > "${SYSROOT}/etc/ld-musl-x86_64.path"
@@ -114,13 +114,13 @@ COPY --from=sysroot-musl-base /sysroots/musl/base /sysroots/musl/llvm
 RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
 
 WORKDIR /sources/llvm-project
-RUN patch -p1 < /patches/llvm-project/toolchain-prefix.patch
-RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch
-RUN cmake -S llvm -B build -G Ninja -C /configs/llvm-musl-stage1.cmake -C /configs/llvm-musl-base.cmake
-RUN cmake --build build --target runtimes
-RUN cmake --build build --target install-runtimes
-RUN cmake --build build --target stage2-distribution
-RUN cmake --build build --target stage2-install-distribution
+RUN patch -p1 < /patches/llvm-project/toolchain-prefix.patch && \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
+    cmake -S llvm -B build -G Ninja -C /configs/llvm-musl-stage1.cmake -C /configs/llvm-musl-base.cmake && \
+    cmake --build build --target runtimes && \
+    cmake --build build --target install-runtimes && \
+    cmake --build build --target stage2-distribution && \
+    cmake --build build --target stage2-install-distribution
 
 
 #### 
@@ -136,9 +136,9 @@ ENV PATH="/toolchain/usr/bin:${PATH}"
 
 WORKDIR /sources/make
 RUN LDFLAGS="-static" STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl
-RUN make -j64
-RUN make install
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
 
 ####
 # build bash
@@ -149,11 +149,11 @@ RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
 
 WORKDIR /sources/bash
-RUN sed -ie '/#include "ltcap.h"/i #include <unistd.h>' lib/termcap/tparam.c
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --without-bash-malloc
-RUN make -j64
-RUN make install
+RUN sed -ie '/#include "ltcap.h"/i #include <unistd.h>' lib/termcap/tparam.c && \
+    STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --without-bash-malloc && \
+    make -j64 && \
+    make install
 
 ####
 # final
