@@ -1,0 +1,12 @@
+diff --git a/compiler-rt/lib/ctx_profile/CMakeLists.txt b/compiler-rt/lib/ctx_profile/CMakeLists.txt
+index ce491fc7e8bf..6156f9bf25bd 100644
+--- a/compiler-rt/lib/ctx_profile/CMakeLists.txt
++++ b/compiler-rt/lib/ctx_profile/CMakeLists.txt
+@@ -25,7 +25,6 @@ endif()
+ add_compiler_rt_runtime(clang_rt.ctx_profile
+   STATIC
+   ARCHS ${CTX_PROFILE_SUPPORTED_ARCH}
+-  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc
+   CFLAGS ${EXTRA_FLAGS}
+   SOURCES ${CTX_PROFILE_SOURCES}
+   ADDITIONAL_HEADERS ${CTX_PROFILE_HEADERS}
