@@ -1,0 +1,11 @@
+--- a/bootstrap
++++ b/bootstrap
+@@ -2111,7 +2111,7 @@
+ export LDFLAGS
+ 
+ # Run bootstrap CMake to configure real CMake
+-cmake_options="-DCMAKE_BOOTSTRAP=1"
++cmake_options="-DCMAKE_BOOTSTRAP=1 -DCMAKE_USE_OPENSSL=OFF -DCMAKE_INSTALL_PREFIX=/toolchain/usr"
+ if test -n "${cmake_verbose}"; then
+   cmake_options="${cmake_options} -DCMAKE_VERBOSE_MAKEFILE=1"
+ fi

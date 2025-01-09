@@ -83,6 +83,9 @@ FILES=(
 
     https://ftpmirror.gnu.org/libtool/libtool-2.5.4.tar.gz
     https://ftpmirror.gnu.org/libtool/libtool-2.5.4.tar.gz.sig
+
+    https://ftpmirror.gnu.org/coreutils/coreutils-9.5.tar.gz
+    https://ftpmirror.gnu.org/coreutils/coreutils-9.5.tar.gz.sig
 )
 
 mkdir -p sources

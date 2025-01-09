@@ -171,9 +171,10 @@ FROM base AS toolchain
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y patch
 
-COPY --from=llvm-musl /sysroots/musl/llvm /sysroots/musl/llvm
-RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
+COPY --from=llvm-musl /sysroots/musl/llvm/toolchain /toolchain
+RUN ln -sv . /toolchain/toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
+
 ENV STRIP=llvm-strip
 ENV RANLIB=llvm-ranlib
 ENV AS=llvm-as
@@ -181,6 +182,8 @@ ENV AR=llvm-ar
 ENV LD=lld
 ENV CC=clang
 ENV CXX=clang++
+ENV CFLAGS="--sysroot=/toolchain"
+ENV CXXFLAGS="${CFLAGS}"
 
 WORKDIR /sources/make
 COPY patches/make /patches/make
@@ -203,9 +206,21 @@ RUN ln -svf /toolchain/bin/sh /bin/sh
 RUN ln -svf /toolchain/bin/bash /bin/bash
 
 WORKDIR /sources/python
-RUN ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
+RUN ./configure --prefix=/toolchain/usr --build=x86_64-unknown-linux-musl --host=x86_64-unknown-linux-musl --enable-shared --without-ensurepip && \
     make -j64 && \
     make install
+
+WORKDIR /sources/cmake
+COPY patches/cmake /patches/cmake
+RUN patch -p1 < /patches/cmake/disable-openssl-during-bootstrap.patch && \
+    ./bootstrap && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/ninja
+RUN ./configure.py --bootstrap && \
+    ./ninja all && \
+    install -m 0755 ./ninja /toolchain/usr/bin/ninja
 
 #WORKDIR /sources/m4
 #RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
@@ -233,12 +248,19 @@ RUN ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
 #RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
 #    make -j64 && \
 #    make install
-#
-#WORKDIR /sources/sed
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
-#
+
+WORKDIR /sources/sed
+RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
+##       building as root currently
+WORKDIR /sources/coreutils
+RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
 ## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
 ##       building as root currently
 #WORKDIR /sources/tar
@@ -252,12 +274,18 @@ RUN ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
 #    make install
 #RUN rm /toolchain/usr/lib/liblzma.la
 
-
+####
+# OCI/docker/podman need /bin/sh available, but only /toolchain will exist in
+# the root of our final FROM scratch image.
+####
+FROM base AS oci-compat
+RUN mkdir -p /compat/bin
+RUN ln -s /toolchain/bin/sh /compat/bin/sh
 
 ####
 # final
 ####
-FROM ${FROM}
-COPY --from=toolchain /sysroots/musl/llvm /sysroots/musl/llvm
-RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
-ENV PATH="/toolchain/usr/bin:${PATH}"
+FROM scratch
+COPY --from=oci-compat /compat/bin /bin
+COPY --from=toolchain /toolchain /toolchain
+ENV PATH="/toolchain/usr/bin"
