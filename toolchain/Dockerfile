@@ -129,7 +129,7 @@ RUN ./configure CC="clang --sysroot=/sysroots/glibc/llvm" AR="llvm-ar" RANLIB="l
     make install
 RUN ln -sf libc.so /toolchain/usr/lib/ld-musl-x86_64.so.1
 RUN ln -sf ../lib/libc.so /toolchain/usr/bin/ldd
-RUN echo "/toolchain/usr/lib/x86_64-unknown-linux-musl" > /toolchain/etc/ld-musl-x86_64.path
+RUN echo "/toolchain/usr/lib/x86_64-unknown-linux-musl\n/toolchain/usr/lib" > /toolchain/etc/ld-musl-x86_64.path
 #
 # End SYSROOT-MUSL-BASE build
 #####
@@ -190,11 +190,76 @@ RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
 
 WORKDIR /sources/bash
+# TODO: convert this to a patch
 RUN sed -ie '/#include "ltcap.h"/i #include <unistd.h>' lib/termcap/tparam.c && \
     STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
     ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --without-bash-malloc && \
     make -j64 && \
     make install
+RUN ln -sv bash /toolchain/bin/sh
+RUN ln -svf /toolchain/bin/sh /bin/sh
+RUN ln -svf /toolchain/bin/bash /bin/bash
+
+WORKDIR /sources/m4
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/gawk
+# TODO: convert this to a patch
+RUN sed -ie 's|extras||' Makefile.in && \
+    STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/grep
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/gzip
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/patch
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/sed
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+# TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
+#       building as root currently
+WORKDIR /sources/tar
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/python
+RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+    ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
+    make -j64 && \
+    make install
+
+#WORKDIR /sources/xz
+#RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+#    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-static && \
+#    make -j64 && \
+#    make install
+#RUN rm /target/usr/lib/liblzma.la
+
+
 
 ####
 # final
