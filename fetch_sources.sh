@@ -3,6 +3,18 @@
 set -euxEo pipefail
 
 FILES=(
+    https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz
+    https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz.sha256.txt
+    # no sig file; expected sha256 is c740348f357396327a9795d3e8323bafd0fe8a5c7835fc1cbaba0cc8dfe7161f
+
+    https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
+    https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz.sha256
+    # no sig file; expected sha256 is 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+
+    https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3.tar.gz
+    https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3-SHA-256.txt
+    https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3-SHA-256.txt.asc
+
     https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.6/llvm-project-19.1.6.src.tar.xz
     https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.6/llvm-project-19.1.6.src.tar.xz.sig
 
@@ -15,8 +27,17 @@ FILES=(
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz.asc
 
+    https://github.com/gavinhoward/bc/releases/download/7.0.3/bc-7.0.3.tar.gz
+    https://github.com/gavinhoward/bc/releases/download/7.0.3/bc-7.0.3.tar.gz.sig
+
+    https://zlib.net/zlib-1.3.1.tar.gz
+    https://zlib.net/zlib-1.3.1.tar.gz.asc
+
     https://github.com/tukaani-project/xz/releases/download/v5.6.3/xz-5.6.3.tar.gz
     https://github.com/tukaani-project/xz/releases/download/v5.6.3/xz-5.6.3.tar.gz.sig
+
+    https://www.sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+    https://www.sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz.sig
 
     https://ftpmirror.gnu.org/bash/bash-5.2.37.tar.gz
     https://ftpmirror.gnu.org/bash/bash-5.2.37.tar.gz.sig
@@ -56,11 +77,17 @@ FILES=(
 
     https://ftpmirror.gnu.org/texinfo/texinfo-7.2.tar.gz
     https://ftpmirror.gnu.org/texinfo/texinfo-7.2.tar.gz.sig
+
+    https://ftpmirror.gnu.org/readline/readline-8.2.13.tar.gz
+    https://ftpmirror.gnu.org/readline/readline-8.2.13.tar.gz.sig
+
+    https://ftpmirror.gnu.org/libtool/libtool-2.5.4.tar.gz
+    https://ftpmirror.gnu.org/libtool/libtool-2.5.4.tar.gz.sig
 )
 
 mkdir -p sources
 cd sources
 wget -nc "${FILES[@]}"
-for pkg in *tar.gz *tar.xz; do
+for pkg in *.tar.gz *.tar.xz *.tgz; do
     tar --skip-old-files -xf "${pkg}"
 done
