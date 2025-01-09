@@ -169,95 +169,88 @@ RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
 ####
 FROM base AS toolchain
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y make
+    apt-get install --no-install-recommends -y patch
 
 COPY --from=llvm-musl /sysroots/musl/llvm /sysroots/musl/llvm
 RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
+ENV STRIP=llvm-strip
+ENV RANLIB=llvm-ranlib
+ENV AS=llvm-as
+ENV AR=llvm-ar
+ENV LD=lld
+ENV CC=clang
+ENV CXX=clang++
 
 WORKDIR /sources/make
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+COPY patches/make /patches/make
+RUN patch -p1 < /patches/make/fix-bootstrap.patch && \
     ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-####
-# build bash
-####
-FROM base AS bash
-COPY --from=toolchain /sysroots/musl/llvm /sysroots/musl/llvm
-RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
-ENV PATH="/toolchain/usr/bin:${PATH}"
+    ./build.sh && \
+    ./make install
 
 WORKDIR /sources/bash
-# TODO: convert this to a patch
-RUN sed -ie '/#include "ltcap.h"/i #include <unistd.h>' lib/termcap/tparam.c && \
-    STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
+COPY patches/bash /patches/bash
+RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
     ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --without-bash-malloc && \
     make -j64 && \
     make install
 RUN ln -sv bash /toolchain/bin/sh
+# Force all new docker shell invocations to use our just-build bash shell. This
+# has no affect on the /toolchain sysroot and only persists inside of this image
+# build.
 RUN ln -svf /toolchain/bin/sh /bin/sh
 RUN ln -svf /toolchain/bin/bash /bin/bash
 
-WORKDIR /sources/m4
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-WORKDIR /sources/gawk
-# TODO: convert this to a patch
-RUN sed -ie 's|extras||' Makefile.in && \
-    STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
-    make -j64 && \
-    make install
-
-WORKDIR /sources/grep
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-WORKDIR /sources/gzip
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-WORKDIR /sources/patch
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-WORKDIR /sources/sed
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
-# TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
-#       building as root currently
-WORKDIR /sources/tar
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
-
 WORKDIR /sources/python
-RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-    ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
+RUN ./configure --prefix=/toolchain/usr --enable-shared --without-ensurepip && \
     make -j64 && \
     make install
 
-#WORKDIR /sources/xz
-#RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CXX=clang++ \
-#    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-static && \
+#WORKDIR /sources/m4
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
 #    make -j64 && \
 #    make install
-#RUN rm /target/usr/lib/liblzma.la
+#
+#WORKDIR /sources/gawk
+## TODO: convert this to a patch
+#RUN sed -ie 's|extras||' Makefile.in && \
+#    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
+#    make -j64 && \
+#    make install
+#
+#WORKDIR /sources/grep
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+#    make -j64 && \
+#    make install
+#
+#WORKDIR /sources/gzip
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+#    make -j64 && \
+#    make install
+#
+#WORKDIR /sources/patch
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+#    make -j64 && \
+#    make install
+#
+#WORKDIR /sources/sed
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+#    make -j64 && \
+#    make install
+#
+## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
+##       building as root currently
+#WORKDIR /sources/tar
+#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+#    make -j64 && \
+#    make install
+
+#WORKDIR /sources/xz
+#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-static && \
+#    make -j64 && \
+#    make install
+#RUN rm /toolchain/usr/lib/liblzma.la
 
 
 
@@ -265,6 +258,6 @@ RUN STRIP=llvm-strip RANLIB=llvm-ranlib AS=llvm-as AR=llvm-ar LD=lld CC=clang CX
 # final
 ####
 FROM ${FROM}
-COPY --from=bash /sysroots/musl/llvm /sysroots/musl/llvm
+COPY --from=toolchain /sysroots/musl/llvm /sysroots/musl/llvm
 RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
