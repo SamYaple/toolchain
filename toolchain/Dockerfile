@@ -87,7 +87,12 @@ COPY configs /configs
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-llvm-glibc \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
-    cmake -S llvm -B build -G Ninja -C /configs/llvm-glibc-stage1.cmake -C /configs/llvm-glibc-base.cmake && \
+    cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=ON \
+	-D LLVM_CCACHE_DIR=/ccache \
+	-C /configs/llvm-glibc-stage1.cmake \
+	-C /configs/llvm-glibc-base.cmake \
+	-C /configs/common.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes && \
     cmake --build build --target stage2-distribution && \
@@ -161,7 +166,12 @@ COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-llvm-musl \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
     patch -p1 < /patches/llvm-project/toolchain-prefix.patch && \
-    cmake -S llvm -B build -G Ninja -C /configs/llvm-musl-stage1.cmake -C /configs/llvm-musl-base.cmake && \
+    cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=ON \
+	-D LLVM_CCACHE_DIR=/ccache \
+	-C /configs/llvm-musl-stage1.cmake \
+	-C /configs/llvm-musl-base.cmake \
+	-C /configs/common.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes && \
     cmake --build build --target stage2-distribution && \
@@ -333,7 +343,11 @@ COPY configs /configs
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
-    cmake -S llvm -B build -G Ninja -C /configs/musl-minimal.cmake && \
+    cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=ON \
+	-D LLVM_CCACHE_DIR=/ccache \
+	-C /configs/musl-minimal.cmake \
+	-C /configs/common.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes
 

@@ -11,4 +11,4 @@ set(RUNTIMES_x86_64-unknown-linux-musl_CMAKE_SYSROOT ${_MUSL_SYSROOT} CACHE STRI
 set(BUILTINS_x86_64-unknown-linux-musl_CMAKE_SYSROOT ${_MUSL_SYSROOT} CACHE STRING "")
 
 set(CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
-set(CLANG_BOOTSTRAP_CMAKE_ARGS -D CMAKE_SYSROOT=${_MUSL_SYSROOT} -C /configs/llvm-musl-base.cmake CACHE STRING "")
+set(CLANG_BOOTSTRAP_CMAKE_ARGS -D CMAKE_SYSROOT=${_MUSL_SYSROOT} -C /configs/llvm-musl-base.cmake -C /configs/common.cmake CACHE STRING "")
