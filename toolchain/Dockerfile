@@ -230,13 +230,13 @@ RUN ./configure.py --bootstrap && \
 #RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
 #    make -j64 && \
 #    make install
-#
-#WORKDIR /sources/gawk
-## TODO: convert this to a patch
-#RUN sed -ie 's|extras||' Makefile.in && \
-#    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
-#    make -j64 && \
-#    make install
+
+WORKDIR /sources/gawk
+# TODO: convert this to a patch
+RUN sed -ie 's|extras||' Makefile.in && \
+    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
+    make -j64 && \
+    make install
 
 WORKDIR /sources/grep
 RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
@@ -312,19 +312,22 @@ RUN ln -sf usr/bin /bin
 RUN ln -s usr/lib /lib
 RUN ln -s lib /usr/lib64
 
+# Install linux headers (needed for musl libc)
 WORKDIR /sources/linux
-RUN make HOSTCFLAGS="--sysroot=/toolchain" HOSTLDFLAGS="--sysroot=/toolchain" LLVM=1 -j64 headers && \
+RUN make LLVM=1 -j64 headers && \
     find usr/include -type f ! -name '*.h' -delete && \
     cp -rv usr/include /usr/include
 
+# Install libc
 WORKDIR /sources/musl
-RUN ./configure CC="clang --sysroot=/toolchain" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="/usr" && \
+RUN ./configure CC="clang" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="/usr" && \
     make -j64 && \
     make install
 RUN ln -sf libc.so /usr/lib/ld-musl-x86_64.so.1
 RUN ln -sf ../lib/libc.so /usr/bin/ldd
 RUN echo "/usr/lib/x86_64-unknown-linux-musl\n/usr/lib" > /etc/ld-musl-x86_64.path
 
+# Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
 COPY configs /configs
 COPY patches/llvm-project /patches/llvm-project
@@ -333,3 +336,27 @@ RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
     cmake -S llvm -B build -G Ninja -C /configs/musl-minimal.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes
+
+# TODO: Add all needed libs before the tools that need them
+# make/cmake/ninja and other binaries need to be built last-ish
+
+WORKDIR /sources/make
+RUN ln -s lld /toolchain/usr/bin/ld
+RUN ln -s llvm-ar /toolchain/usr/bin/ar
+RUN ./configure --prefix=/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/cmake
+RUN cmake -B build -D CMAKE_INSTALL_PREFIX=/usr -D CMAKE_USE_OPENSSL=OFF && \
+    cmake --build build --target install --parallel 64
+
+WORKDIR /sources/python
+RUN ./configure --prefix=/usr --build=x86_64-unknown-linux-musl --host=x86_64-unknown-linux-musl --enable-shared --without-ensurepip && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/ninja
+RUN cmake -B build -D BUILD_TESTING=OFF && \
+    cmake --build build --parallel 64
+    install -m 0755 ./ninja /usr/bin/ninja
