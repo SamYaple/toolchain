@@ -27,6 +27,9 @@ FILES=(
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz.asc
 
+    https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2.tar.gz
+    https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2.tar.gz.asc
+
     https://github.com/gavinhoward/bc/releases/download/7.0.3/bc-7.0.3.tar.gz
     https://github.com/gavinhoward/bc/releases/download/7.0.3/bc-7.0.3.tar.gz.sig
 
@@ -86,6 +89,9 @@ FILES=(
 
     https://ftpmirror.gnu.org/coreutils/coreutils-9.5.tar.gz
     https://ftpmirror.gnu.org/coreutils/coreutils-9.5.tar.gz.sig
+
+    https://ftpmirror.gnu.org/findutils/findutils-4.10.0.tar.xz
+    https://ftpmirror.gnu.org/findutils/findutils-4.10.0.tar.xz.sig
 )
 
 mkdir -p sources

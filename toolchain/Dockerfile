@@ -64,6 +64,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
         gcc \
         cmake \
 	patch \
+	ccache \
         ninja-build \
         python3
 # Build llvm on top of the pristine glibc environment we unpacked in the
@@ -84,7 +85,8 @@ COPY --from=sysroot-glibc-base /sysroots/glibc/base /sysroots/glibc/llvm
 WORKDIR /sources/llvm-project
 COPY configs /configs
 COPY patches/llvm-project /patches/llvm-project
-RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
+RUN --mount=type=cache,target=/ccache,id=ccache-llvm-glibc \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
     cmake -S llvm -B build -G Ninja -C /configs/llvm-glibc-stage1.cmake -C /configs/llvm-glibc-base.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes && \
@@ -143,6 +145,7 @@ FROM base AS llvm-musl
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y \
         cmake \
+	ccache \
         ninja-build \
         python3 \
         patch
@@ -155,7 +158,8 @@ ENV PATH="/sysroots/glibc/llvm/usr/bin:${PATH}"
 WORKDIR /sources/llvm-project
 COPY configs /configs
 COPY patches/llvm-project /patches/llvm-project
-RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
+RUN --mount=type=cache,target=/ccache,id=ccache-llvm-musl \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
     patch -p1 < /patches/llvm-project/toolchain-prefix.patch && \
     cmake -S llvm -B build -G Ninja -C /configs/llvm-musl-stage1.cmake -C /configs/llvm-musl-base.cmake && \
     cmake --build build --target runtimes && \
@@ -165,7 +169,7 @@ RUN patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
 
 
 #### 
-# build static gnumake
+# bootstrap new toolchain
 ####
 FROM base AS toolchain
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
@@ -233,21 +237,21 @@ RUN ./configure.py --bootstrap && \
 #    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
 #    make -j64 && \
 #    make install
-#
-#WORKDIR /sources/grep
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
-#
+
+WORKDIR /sources/grep
+RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
 #WORKDIR /sources/gzip
 #RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
 #    make -j64 && \
 #    make install
-#
-#WORKDIR /sources/patch
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
+
+WORKDIR /sources/patch
+RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
 
 WORKDIR /sources/sed
 RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
@@ -258,6 +262,11 @@ RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
 ##       building as root currently
 WORKDIR /sources/coreutils
 RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
+    make -j64 && \
+    make install
+
+WORKDIR /sources/findutils
+RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
     make -j64 && \
     make install
 
@@ -274,6 +283,14 @@ RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-u
 #    make install
 #RUN rm /toolchain/usr/lib/liblzma.la
 
+WORKDIR /sources/ccache/build
+# TODO: I need to find a better way to provide these deps to ccahe during build
+COPY ccachedeps /ccachedeps
+RUN ln -s /ccachedeps/_deps _deps && \
+    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/toolchain/usr -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. && \
+    make -j64 && \
+    make install
+
 ####
 # OCI/docker/podman need /bin/sh available, but only /toolchain will exist in
 # the root of our final FROM scratch image.
@@ -289,3 +306,30 @@ FROM scratch
 COPY --from=oci-compat /compat/bin /bin
 COPY --from=toolchain /toolchain /toolchain
 ENV PATH="/toolchain/usr/bin"
+
+RUN mkdir /usr /usr/bin /usr/lib /tmp
+RUN ln -sf usr/bin /bin
+RUN ln -s usr/lib /lib
+RUN ln -s lib /usr/lib64
+
+WORKDIR /sources/linux
+RUN make HOSTCFLAGS="--sysroot=/toolchain" HOSTLDFLAGS="--sysroot=/toolchain" LLVM=1 -j64 headers && \
+    find usr/include -type f ! -name '*.h' -delete && \
+    cp -rv usr/include /usr/include
+
+WORKDIR /sources/musl
+RUN ./configure CC="clang --sysroot=/toolchain" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="/usr" && \
+    make -j64 && \
+    make install
+RUN ln -sf libc.so /usr/lib/ld-musl-x86_64.so.1
+RUN ln -sf ../lib/libc.so /usr/bin/ldd
+RUN echo "/usr/lib/x86_64-unknown-linux-musl\n/usr/lib" > /etc/ld-musl-x86_64.path
+
+WORKDIR /sources/llvm-project
+COPY configs /configs
+COPY patches/llvm-project /patches/llvm-project
+RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
+    cmake -S llvm -B build -G Ninja -C /configs/musl-minimal.cmake && \
+    cmake --build build --target runtimes && \
+    cmake --build build --target install-runtimes

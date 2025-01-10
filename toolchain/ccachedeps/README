@@ -1,0 +1,8 @@
+This directory caches the expected package downloads needed to build ccache. It
+needs to be refactored/automated in some way. No hashes or signatures are
+compared currently.
+
+wget https://github.com/doctest/doctest/releases/download/v2.4.11/doctest.h
+wget https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-1.5.6.tar.gz
+wget https://github.com/redis/hiredis/archive/refs/tags/v1.2.0.tar.gz
+wget https://github.com/Cyan4973/xxhash/archive/refs/tags/v0.8.2.tar.gz
