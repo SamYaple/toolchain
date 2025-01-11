@@ -21,4 +21,4 @@ foreach(target x86_64-unknown-linux-gnu)
 endforeach()
 
 set(CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
-set(CLANG_BOOTSTRAP_CMAKE_ARGS -C /configs/llvm-glibc-stage2.cmake -C /configs/llvm-glibc-base.cmake -C /configs/common.cmake CACHE STRING "")
+set(CLANG_BOOTSTRAP_CMAKE_ARGS -C /glibc-stage2.cmake -C /glibc-base.cmake -C /common.cmake CACHE STRING "")

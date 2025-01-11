@@ -83,16 +83,16 @@ COPY --from=sysroot-glibc-base /sysroots/glibc/base /sysroots/glibc/llvm
 #       build to work. This was not a problem in llvm 18.x but I haven't looked
 #       at the issue beyond making this quick patch.
 WORKDIR /sources/llvm-project
-COPY configs /configs
+COPY configs/common.cmake configs/glibc-base.cmake configs/glibc-stage1.cmake configs/glibc-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-llvm-glibc \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
     cmake -S llvm -B build -G Ninja \
         -D LLVM_CCACHE_BUILD=ON \
 	-D LLVM_CCACHE_DIR=/ccache \
-	-C /configs/llvm-glibc-stage1.cmake \
-	-C /configs/llvm-glibc-base.cmake \
-	-C /configs/common.cmake && \
+	-C /glibc-stage1.cmake \
+	-C /glibc-base.cmake \
+	-C /common.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes && \
     cmake --build build --target stage2-distribution && \
@@ -114,13 +114,14 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 COPY --from=stage0 /sysroots/glibc/llvm /sysroots/glibc/llvm
 ENV PATH="/sysroots/glibc/llvm/usr/bin:${PATH}"
 # Setup our sysroot structure. It is more or less the merged-usr approach.
-RUN mkdir -p /sysroots/musl/base/toolchain
+RUN mkdir -p /sysroots/musl/base
+RUN ln -sv . /sysroots/musl/base/toolchain
 RUN ln -sv /sysroots/musl/base/toolchain /toolchain
 WORKDIR /toolchain
 RUN mkdir usr usr/bin usr/lib etc
-RUN ln -s usr/lib lib
-RUN ln -s usr/bin bin
-RUN ln -s lib usr/lib64
+RUN ln -sv usr/lib lib
+RUN ln -sv usr/bin bin
+RUN ln -sv lib usr/lib64
 # We need the linux headers to build musl (unlike with glibc). We build them
 # using our stage0 compiler. TODO: detail the what/when/hows of this process
 WORKDIR /sources/linux
@@ -161,7 +162,7 @@ COPY --from=stage0 /sysroots/glibc/llvm /sysroots/glibc/llvm
 ENV PATH="/sysroots/glibc/llvm/usr/bin:${PATH}"
 
 WORKDIR /sources/llvm-project
-COPY configs /configs
+COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage1.cmake configs/musl-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-llvm-musl \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
@@ -169,9 +170,9 @@ RUN --mount=type=cache,target=/ccache,id=ccache-llvm-musl \
     cmake -S llvm -B build -G Ninja \
         -D LLVM_CCACHE_BUILD=ON \
 	-D LLVM_CCACHE_DIR=/ccache \
-	-C /configs/llvm-musl-stage1.cmake \
-	-C /configs/llvm-musl-base.cmake \
-	-C /configs/common.cmake && \
+	-C /musl-stage1.cmake \
+	-C /musl-base.cmake \
+	-C /common.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes && \
     cmake --build build --target stage2-distribution && \
@@ -339,15 +340,14 @@ RUN echo "/usr/lib/x86_64-unknown-linux-musl\n/usr/lib" > /etc/ld-musl-x86_64.pa
 
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
-COPY configs /configs
+COPY configs/common.cmake configs/musl-minimal.cmake /
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
     cmake -S llvm -B build -G Ninja \
         -D LLVM_CCACHE_BUILD=ON \
 	-D LLVM_CCACHE_DIR=/ccache \
-	-C /configs/musl-minimal.cmake \
-	-C /configs/common.cmake && \
+	-C /musl-minimal.cmake && \
     cmake --build build --target runtimes && \
     cmake --build build --target install-runtimes
 
