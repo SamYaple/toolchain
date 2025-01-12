@@ -9,73 +9,73 @@ ARG FROM=docker.io/library/debian:bookworm-slim
 # project. The `docker-clean` apt configuration conflicts with this way of
 # caching and must be removed. This is the only time `apt-get update` is called
 # throughout the Dockerfile.
+
 FROM ${FROM} AS base
 COPY debian.sources /etc/apt/sources.list.d/
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    rm /etc/apt/apt.conf.d/docker-clean && \
-    apt-get update
-#
+    rm /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update
+
+# Setup some common variables used throughout the build process, but not in the
+# final produced image. No trickery going on here, just some helper vars.
+ENV GLIBC_SYSROOT=/sysroots/glibc
+ENV GLIBC_TRIPLE=x86_64-unknown-linux-gnu
+ENV MUSL_SYSROOT=/sysroots/musl
+ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
+ENV CCACHE_DIR=/ccache
+ARG CCACHE_BUILD=OFF
+ENV CCACHE_BUILD=${CCACHE_BUILD}
+
 # End BASE build
 #####
 
 
 #####
-# SYSROOT-GLIBC-BASE
-#
-# Extract the packaged version of glibc and headers. This will not contain any
-# c++ library, nor any tooling. It exists as minimal sysroot which we will use
-# to bootstrap LLVM against during our STAGE0 build.
-FROM base AS sysroot-glibc-base
-WORKDIR /sysroots/glibc/base
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get download libc6 libc6-dev linux-libc-dev
-RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done
-RUN mv lib/x86_64-linux-gnu/* usr/lib/x86_64-linux-gnu/
-RUN rm -rf lib* *.deb etc/ld.so.conf.d/*
-RUN mkdir usr/bin
-RUN ln -sv bin usr/sbin
-RUN ln -sv lib usr/lib64
-RUN ln -sv usr/lib lib
-RUN ln -sv usr/lib lib64
-RUN ln -sv usr/bin bin
-RUN ln -sv usr/bin sbin
-RUN ln -sv ../etc usr/etc
-RUN ln -sv x86_64-linux-gnu/libc.so.6 lib/libc.so.6
-RUN ln -sv x86_64-linux-gnu/libm.so.6 lib/libm.so.6
-RUN ln -sv x86_64-linux-gnu/ld-linux-x86-64.so.2 lib/ld-linux-x86-64.so.2
-RUN cd lib/x86_64-linux-gnu && find . -type l -printf '%P\0' | xargs -0 -r -n1 bash -c 'ln -svf ${1}.* ${1}' _
-#
-# End SYSROOT-GLIBC-BASE build
-#####
+# BOOTSTRAP
 
+FROM base AS bootstrap
 
-#####
-# STAGE0
-#
-# Produces a working toolchain with LLVM and Clang that is still linked against
-# `glibc`. This will be the base compiler we use to bootstrap the Musl sysroot
-FROM base AS stage0
-# Install a base toolchain to build our stage0 compiler from. We are using `gcc`
-# and `g++` for the C compiler and C++ compiler respectively. You could swap out
-# this with any other compiler that can build LLVM, at least in theory.
+# Install a base toolchain to build our bootstrap compiler from. We are using
+# `gcc` and `g++` for the C compiler and C++ compiler respectively. You could
+# swap out this with any other compiler that can build LLVM, at least in theory.
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y \
+        ccache \
+        cmake \
         g++ \
         gcc \
-        cmake \
-	patch \
-	ccache \
         ninja-build \
+        patch \
         python3
-# Build llvm on top of the pristine glibc environment we unpacked in the
-# `sysroot-glibc-base` image. This sysroot contains only libc and its headers
-# without any c++.
-COPY --from=sysroot-glibc-base /sysroots/glibc/base /sysroots/glibc/llvm
+
+# Create a new sysroot with glibc installed
+WORKDIR ${GLIBC_SYSROOT}
+# extract a pre-built glibc and headers. this step should work from a non-debian
+# based system if you extract the deb files in the same way.
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get download libc6 libc6-dev linux-libc-dev
+RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done \
+    && mv lib/x86_64-linux-gnu/* usr/lib/x86_64-linux-gnu/ \
+    && rm -rf lib* *.deb etc/ld.so.conf.d/* \
+    && mkdir usr/bin \
+    && ln -sv bin usr/sbin \
+    && ln -sv lib usr/lib64 \
+    && ln -sv usr/lib lib \
+    && ln -sv usr/lib lib64 \
+    && ln -sv usr/bin bin \
+    && ln -sv usr/bin sbin \
+    && ln -sv ../etc usr/etc \
+    && ln -sv x86_64-linux-gnu/libc.so.6 lib/libc.so.6 \
+    && ln -sv x86_64-linux-gnu/libm.so.6 lib/libm.so.6 \
+    && ln -sv x86_64-linux-gnu/ld-linux-x86-64.so.2 lib/ld-linux-x86-64.so.2 \
+    && cd lib/x86_64-linux-gnu \
+    && find . -type l -exec sh -c 'ln -svf "$1".* "$1"' _ {} \;
+
 # Build LLVM
 #
 # The referenced cmake config files contain all the configuration options set
-# to ensure this stage0 compiler will be a minimal distribution of tools. Only
-# the tools needed to bootstrap the musl toolchain are kept.
+# to ensure this bootstrap compiler will be a minimal distribution of tools.
+# Only the tools needed to bootstrap the musl toolchain are kept.
 #
 # The cmake files are also commented for additional reading.
 #
@@ -85,222 +85,281 @@ COPY --from=sysroot-glibc-base /sysroots/glibc/base /sysroots/glibc/llvm
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake configs/glibc-base.cmake configs/glibc-stage1.cmake configs/glibc-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=/ccache,id=ccache-llvm-glibc \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
-    cmake -S llvm -B build -G Ninja \
-        -D LLVM_CCACHE_BUILD=ON \
-	-D LLVM_CCACHE_DIR=/ccache \
-	-C /glibc-stage1.cmake \
-	-C /glibc-base.cmake \
-	-C /common.cmake && \
-    cmake --build build --target runtimes && \
-    cmake --build build --target install-runtimes && \
-    cmake --build build --target stage2-distribution && \
-    cmake --build build --target stage2-install-distribution
-#
-# End STAGE0 build
+RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-bootstrap \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+    && cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
+        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
+        -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
+        -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
+        -C /glibc-stage1.cmake \
+        -C /glibc-base.cmake \
+        -C /common.cmake \
+    && cmake --build build --target runtimes \
+    && cmake --build build --target install-runtimes \
+    && cmake --build build --target stage2-distribution \
+    && cmake --build build --target stage2-install-distribution
+
+# I could use the cmake build to setup these symlinks, but for now I am doing it
+# directly. This will allow most of the remaining builds to detect which tools
+# to use.
+WORKDIR ${GLIBC_SYSROOT}
+RUN ln -sv clang           bin/cc \
+    && ln -sv clang++      bin/c++ \
+    && ln -sv lld          bin/ld \
+    && ln -sv llvm-ar      bin/ar \
+    && ln -sv llvm-nm      bin/nm \
+    && ln -sv llvm-objcopy bin/objcopy \
+    && ln -sv llvm-objdump bin/objdump \
+    && ln -sv llvm-ranlib  bin/ranlib \
+    && ln -sv llvm-size    bin/size \
+    && ln -sv llvm-strings bin/strings \
+    && ln -sv llvm-strip   bin/strip
+
+# End BOOTSTRAP build
 #####
 
 
 #####
-# SYSROOT-MUSL-BASE
-#
-FROM base AS sysroot-musl-base
+# STAGE0
+
+FROM base AS stage0
+
 # We reuse the `base` image here, so we have no tools. gnumake and a
 # functioning compiler is needed. We copy in our stage0 compiler and install
 # make from a packaged source.
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y make
-COPY --from=stage0 /sysroots/glibc/llvm /sysroots/glibc/llvm
-ENV PATH="/sysroots/glibc/llvm/usr/bin:${PATH}"
-# Setup our sysroot structure. It is more or less the merged-usr approach.
-RUN mkdir -p /sysroots/musl/base
-RUN ln -sv . /sysroots/musl/base/toolchain
-RUN ln -sv /sysroots/musl/base/toolchain /toolchain
-WORKDIR /toolchain
-RUN mkdir usr usr/bin usr/lib etc
-RUN ln -sv usr/lib lib
-RUN ln -sv usr/bin bin
-RUN ln -sv lib usr/lib64
+    apt-get install --no-install-recommends -y \
+        cmake \
+        ccache \
+        ninja-build \
+        python3 \
+        patch \
+        make
+
+COPY --from=bootstrap ${GLIBC_SYSROOT} ${GLIBC_SYSROOT}
+ENV PATH="${GLIBC_SYSROOT}/usr/bin:${PATH}"
+
+WORKDIR ${MUSL_SYSROOT}
+RUN mkdir usr usr/bin usr/lib etc \
+    && ln -sv usr/lib lib \
+    && ln -sv usr/bin bin \
+    && ln -sv lib usr/lib64 \
+    && ln -sv . toolchain \
+    && ln -sv ${MUSL_SYSROOT} /toolchain
+
 # We need the linux headers to build musl (unlike with glibc). We build them
-# using our stage0 compiler. TODO: detail the what/when/hows of this process
+# using our bootstrap compiler. TODO: detail the what/when/hows of this process
 WORKDIR /sources/linux
-RUN make HOSTCFLAGS="--sysroot=/sysroots/glibc/llvm" HOSTLDFLAGS="--sysroot=/sysroots/glibc/llvm" LLVM=1 -j64 headers && \
+RUN make HOSTCFLAGS="--sysroot=${GLIBC_SYSROOT}" HOSTLDFLAGS="--sysroot=${GLIBC_SYSROOT}" LLVM=1 -j64 headers && \
     find usr/include -type f ! -name '*.h' -delete && \
     cp -rv usr/include /toolchain/usr/include
-# Build and install musl libc using our stage0 tools. A small twist is having
+
+# Build and install musl libc using our bootstrap tools. A small twist is having
 # `/toolchain/etc/ld-musl-x86_64.path` look into `/toolchain/usr` vs `/usr`.
 # This further isolates our new toolchain from any host files.
 WORKDIR /sources/musl
-RUN ./configure CC="clang --sysroot=/sysroots/glibc/llvm" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="/toolchain/usr" && \
+RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="/toolchain/usr" && \
     make -j64 && \
     make install
-RUN ln -sf libc.so /toolchain/usr/lib/ld-musl-x86_64.so.1
-RUN ln -sf ../lib/libc.so /toolchain/usr/bin/ldd
-RUN echo "/toolchain/usr/lib/x86_64-unknown-linux-musl\n/toolchain/usr/lib" > /toolchain/etc/ld-musl-x86_64.path
-#
-# End SYSROOT-MUSL-BASE build
-#####
-
-
-####
-# build llvm based on musl
-####
-FROM base AS llvm-musl
-
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y \
-        cmake \
-	ccache \
-        ninja-build \
-        python3 \
-        patch
-
-COPY --from=sysroot-musl-base /sysroots/musl/base /sysroots/musl/llvm
-RUN ln -sv /sysroots/musl/llvm/toolchain /toolchain
-COPY --from=stage0 /sysroots/glibc/llvm /sysroots/glibc/llvm
-ENV PATH="/sysroots/glibc/llvm/usr/bin:${PATH}"
+RUN ln -svf libc.so /toolchain/usr/lib/ld-musl-x86_64.so.1
+RUN ln -svf ../lib/libc.so /toolchain/usr/bin/ldd
+RUN echo "/toolchain/usr/lib/${MUSL_TRIPLE}\n/toolchain/usr/lib" > /toolchain/etc/ld-musl-x86_64.path
 
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage1.cmake configs/musl-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=/ccache,id=ccache-llvm-musl \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
-    patch -p1 < /patches/llvm-project/toolchain-prefix.patch && \
-    cmake -S llvm -B build -G Ninja \
-        -D LLVM_CCACHE_BUILD=ON \
-	-D LLVM_CCACHE_DIR=/ccache \
-	-C /musl-stage1.cmake \
-	-C /musl-base.cmake \
-	-C /common.cmake && \
-    cmake --build build --target runtimes && \
-    cmake --build build --target install-runtimes && \
-    cmake --build build --target stage2-distribution && \
-    cmake --build build --target stage2-install-distribution
+RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-stage0 \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+    && patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
+    && cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
+        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
+        -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
+        -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
+        -D MUSL_SYSROOT=${MUSL_SYSROOT} \
+        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
+        -C /musl-stage1.cmake \
+        -C /musl-base.cmake \
+        -C /common.cmake \
+    && cmake --build build --target runtimes \
+    && cmake --build build --target install-runtimes \
+    && cmake --build build --target stage2-distribution \
+    && cmake --build build --target stage2-install-distribution
 
+# I could use the cmake build to setup these symlinks, but for now I am doing it
+# directly. This will allow most of the remaining builds to detect which tools
+# to use.
+WORKDIR ${MUSL_SYSROOT}
+RUN ln -sv clang           bin/cc \
+    && ln -sv clang++      bin/c++ \
+    && ln -sv lld          bin/ld \
+    && ln -sv llvm-ar      bin/ar \
+    && ln -sv llvm-nm      bin/nm \
+    && ln -sv llvm-objcopy bin/objcopy \
+    && ln -sv llvm-objdump bin/objdump \
+    && ln -sv llvm-ranlib  bin/ranlib \
+    && ln -sv llvm-size    bin/size \
+    && ln -sv llvm-strings bin/strings \
+    && ln -sv llvm-strip   bin/strip
+
+# only needed because im applying patches to some of these source trees
+WORKDIR /sources/patch
+ENV PATH="/toolchain/usr/bin:${PATH}"
+ENV CFLAGS="--sysroot=/toolchain"
+ENV CXXFLAGS="${CFLAGS}"
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
+# END STAGE0
+####
 
 #### 
-# bootstrap new toolchain
-####
-FROM base AS toolchain
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y patch
+# TOOLCHAIN
 
-COPY --from=llvm-musl /sysroots/musl/llvm/toolchain /toolchain
-RUN ln -sv . /toolchain/toolchain
+FROM base AS toolchain
+COPY --from=stage0 ${MUSL_SYSROOT} ${MUSL_SYSROOT}
+RUN ln -sv ${MUSL_SYSROOT} /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
 
-ENV STRIP=llvm-strip
-ENV RANLIB=llvm-ranlib
-ENV AS=llvm-as
-ENV AR=llvm-ar
-ENV LD=lld
-ENV CC=clang
-ENV CXX=clang++
 ENV CFLAGS="--sysroot=/toolchain"
 ENV CXXFLAGS="${CFLAGS}"
 
 WORKDIR /sources/make
 COPY patches/make /patches/make
 RUN patch -p1 < /patches/make/fix-bootstrap.patch && \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    ./build.sh && \
-    ./make install
+    ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && ./build.sh \
+    && ./make install
 
 WORKDIR /sources/bash
 COPY patches/bash /patches/bash
 RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --without-bash-malloc && \
-    make -j64 && \
-    make install
+    ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+	--without-bash-malloc \
+    && make -j64 \
+    && make install
 RUN ln -sv bash /toolchain/bin/sh
-# Force all new docker shell invocations to use our just-build bash shell. This
-# has no affect on the /toolchain sysroot and only persists inside of this image
-# build.
-RUN ln -svf /toolchain/bin/sh /bin/sh
-RUN ln -svf /toolchain/bin/bash /bin/bash
 
 WORKDIR /sources/python
-RUN ./configure --prefix=/toolchain/usr --build=x86_64-unknown-linux-musl --host=x86_64-unknown-linux-musl --enable-shared --without-ensurepip && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--build=${MUSL_TRIPLE} \
+	--host=${MUSL_TRIPLE} \
+	--enable-shared \
+	--without-ensurepip \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/cmake
 COPY patches/cmake /patches/cmake
-RUN patch -p1 < /patches/cmake/disable-openssl-during-bootstrap.patch && \
-    ./bootstrap && \
-    make -j64 && \
+RUN ./bootstrap -- \
+        -D CMAKE_USE_OPENSSL=OFF \
+	-D CMAKE_INSTALL_PREFIX=/toolchain/usr \
+    && make -j64 \
     make install
 
 WORKDIR /sources/ninja
-RUN ./configure.py --bootstrap && \
-    ./ninja all && \
-    install -m 0755 ./ninja /toolchain/usr/bin/ninja
+RUN ./configure.py --bootstrap \
+    && ./ninja all \
+    && install -m 0755 ./ninja /toolchain/usr/bin/ninja
 
 #WORKDIR /sources/m4
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
+#RUN ./configure
+#        --prefix=/toolchain/usr
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 WORKDIR /sources/gawk
 # TODO: convert this to a patch
-RUN sed -ie 's|extras||' Makefile.in && \
-    ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-extensions && \
-    make -j64 && \
+RUN sed -ie 's|extras||' Makefile.in \
+    && ./configure \
+        --prefix=/toolchain/usr \
+        --host=${MUSL_TRIPLE} \
+        --disable-extensions \
+    && make -j64 \
     make install
 
 WORKDIR /sources/grep
-RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 #WORKDIR /sources/gzip
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 WORKDIR /sources/patch
-RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/sed
-RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 ## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
 ##       building as root currently
 WORKDIR /sources/coreutils
-RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/findutils
-RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/toolchain/usr \
+	--host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 ## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
 ##       building as root currently
 #WORKDIR /sources/tar
-#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl && \
-#    make -j64 && \
-#    make install
+#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
+#        --prefix=/toolchain/usr \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 #WORKDIR /sources/xz
-#RUN ./configure --prefix=/toolchain/usr --host=x86_64-unknown-linux-musl --disable-static && \
-#    make -j64 && \
-#    make install
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --host=${MUSL_TRIPLE} \
+#        --disable-static \
+#    && make -j64 \
+#    && make install
 #RUN rm /toolchain/usr/lib/liblzma.la
 
 WORKDIR /sources/ccache/build
 # TODO: I need to find a better way to provide these deps to ccahe during build
 COPY ccachedeps /ccachedeps
-RUN ln -s /ccachedeps/_deps _deps && \
-    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/toolchain/usr -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. && \
-    make -j64 && \
-    make install
+RUN ln -s /ccachedeps/_deps _deps \
+    && cmake \
+        -D CMAKE_BUILD_TYPE=Release \
+	-D CMAKE_INSTALL_PREFIX=/toolchain/usr \
+	-D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
+    && make -j64 \
+    && make install
 
 ####
 # OCI/docker/podman need /bin/sh available, but only /toolchain will exist in
@@ -317,6 +376,7 @@ FROM scratch
 COPY --from=oci-compat /compat/bin /bin
 COPY --from=toolchain /toolchain /toolchain
 ENV PATH="/toolchain/usr/bin"
+RUN false
 
 RUN mkdir /usr /usr/bin /usr/lib /tmp
 RUN ln -sf usr/bin /bin
@@ -331,25 +391,29 @@ RUN make LLVM=1 -j64 headers && \
 
 # Install libc
 WORKDIR /sources/musl
-RUN ./configure CC="clang" AR="llvm-ar" RANLIB="llvm-ranlib" --target="x86_64-unknown-linux-musl" --prefix="/usr" && \
+RUN ./configure CC="clang" AR="llvm-ar" RANLIB="llvm-ranlib" --target="${MUSL_TRIPLE}" --prefix="/usr" && \
     make -j64 && \
     make install
 RUN ln -sf libc.so /usr/lib/ld-musl-x86_64.so.1
 RUN ln -sf ../lib/libc.so /usr/bin/ldd
-RUN echo "/usr/lib/x86_64-unknown-linux-musl\n/usr/lib" > /etc/ld-musl-x86_64.path
+RUN echo "/usr/lib/${MUSL_TRIPLE}\n/usr/lib" > /etc/ld-musl-x86_64.path
 
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
-COPY configs/common.cmake configs/musl-minimal.cmake /
+COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch && \
-    cmake -S llvm -B build -G Ninja \
-        -D LLVM_CCACHE_BUILD=ON \
-	-D LLVM_CCACHE_DIR=/ccache \
-	-C /musl-minimal.cmake && \
-    cmake --build build --target runtimes && \
-    cmake --build build --target install-runtimes
+RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-toolchain \
+    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+    && cmake -S llvm -B build -G Ninja \
+        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
+        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
+        -D MUSL_SYSROOT=${MUSL_SYSROOT} \
+        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
+        -C /musl-stage2.cmake \
+        -C /musl-base.cmake \
+        -C /common.cmake \
+    && cmake --build build --target runtimes \
+    && cmake --build build --target install-runtimes
 
 # TODO: Add all needed libs before the tools that need them
 # make/cmake/ninja and other binaries need to be built last-ish
@@ -357,20 +421,26 @@ RUN --mount=type=cache,target=/ccache,id=ccache-toolchain \
 WORKDIR /sources/make
 RUN ln -s lld /toolchain/usr/bin/ld
 RUN ln -s llvm-ar /toolchain/usr/bin/ar
-RUN ./configure --prefix=/usr --host=x86_64-unknown-linux-musl && \
-    make -j64 && \
-    make install
+RUN ./configure --prefix=/usr --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/cmake
-RUN cmake -B build -D CMAKE_INSTALL_PREFIX=/usr -D CMAKE_USE_OPENSSL=OFF && \
-    cmake --build build --target install --parallel 64
+RUN cmake -B build -D CMAKE_INSTALL_PREFIX=/usr -D CMAKE_USE_OPENSSL=OFF \
+    && cmake --build build --parallel 64 \
+    && cmake --build build --target install
 
 WORKDIR /sources/python
-RUN ./configure --prefix=/usr --build=x86_64-unknown-linux-musl --host=x86_64-unknown-linux-musl --enable-shared --without-ensurepip && \
-    make -j64 && \
-    make install
+RUN ./configure \
+        --prefix=/usr \
+	--build=${MUSL_TRIPLE} \
+	--host=${MUSL_TRIPLE} \
+	--enable-shared \
+	--without-ensurepip \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/ninja
-RUN cmake -B build -D BUILD_TESTING=OFF && \
-    cmake --build build --parallel 64
-    install -m 0755 ./ninja /usr/bin/ninja
+RUN cmake -B build -D BUILD_TESTING=OFF \
+    && cmake --build build --parallel 64 \
+    && install -m 0755 ./ninja /usr/bin/ninja

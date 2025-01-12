@@ -1,7 +1,10 @@
 # musl stage2
-#set(_SYSROOT /sysroots/musl/llvm)
-#set(_TARGET x86_64-unknown-linux-musl)
 
-#set(                    CMAKE_SYSROOT ${_SYSROOT} CACHE STRING "")
-#set(RUNTIMES_${_TARGET}_CMAKE_SYSROOT ${_SYSROOT} CACHE STRING "")
-#set(BUILTINS_${_TARGET}_CMAKE_SYSROOT ${_SYSROOT} CACHE STRING "")
+# At this point in our build, the ${_SYSROOT} has the following components
+# installed: libc, libc++, libunwind, compiler-rt. Additionally, we can reuse
+# the Clang and LLVM tools compiled in stage1 to rebuild Clang and LLVM.
+#
+# The output of the stage2 build is a toolchain that was built with the current
+# version of LLVM and Clang in it's own contained sysroot. In our case, we have
+# switched from a glibc based toolchain to a musl base toolchain.
+set(CMAKE_SYSROOT ${MUSL_SYSROOT} CACHE STRING "")

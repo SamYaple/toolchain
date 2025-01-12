@@ -60,10 +60,10 @@ set(_LLVM_DISTRIBUTION_COMPONENTS
 
 # Set defaults for the compiler to use when invoked by the user.
 #  LLVM       |  GNU
-# libc++      | glibc++
+# libc++      | libstdc++
 # lld         | ld (from binutils)
-# compiler-rt | libgcc_s
-# libunwind   | libgcc_s (provides unwinder)
+# compiler-rt | libgcc_s (glibc)
+# libunwind   | libgcc_s (glibc;provides unwinder)
 set(CLANG_DEFAULT_CXX_STDLIB "libc++"      CACHE STRING "")
 set(CLANG_DEFAULT_LINKER     "lld"         CACHE STRING "")
 set(CLANG_DEFAULT_RTLIB      "compiler-rt" CACHE STRING "")

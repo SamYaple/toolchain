@@ -2,4 +2,11 @@
 
 set -euxEo pipefail
 
-podman build --disable-compression -v ${PWD}/sources:/sources:O --tag toolchain toolchain
+CCACHE_BUILD="${CCACHE_BUILD:-ON}"
+
+podman build \
+    --disable-compression \
+    --volume ${PWD}/sources:/sources:O \
+    --build-arg CCACHE_BUILD="${CCACHE_BUILD}" \
+    --tag toolchain \
+    toolchain
