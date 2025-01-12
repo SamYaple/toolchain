@@ -210,7 +210,8 @@ ENV CFLAGS="--sysroot=/toolchain"
 ENV CXXFLAGS="${CFLAGS}"
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
@@ -233,7 +234,8 @@ COPY patches/make /patches/make
 RUN patch -p1 < /patches/make/fix-bootstrap.patch && \
     ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && ./build.sh \
     && ./make install
 
@@ -242,8 +244,9 @@ COPY patches/bash /patches/bash
 RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
     ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
-	--without-bash-malloc \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --without-bash-malloc \
     && make -j64 \
     && make install
 RUN ln -sv bash /toolchain/bin/sh
@@ -251,20 +254,19 @@ RUN ln -sv bash /toolchain/bin/sh
 WORKDIR /sources/python
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--build=${MUSL_TRIPLE} \
-	--host=${MUSL_TRIPLE} \
-	--enable-shared \
-	--without-ensurepip \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --enable-shared \
+        --without-ensurepip \
     && make -j64 \
     && make install
 
 WORKDIR /sources/cmake
-COPY patches/cmake /patches/cmake
-RUN ./bootstrap -- \
+RUN ./bootstrap --parallel=64 -- \
+        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
         -D CMAKE_USE_OPENSSL=OFF \
-	-D CMAKE_INSTALL_PREFIX=/toolchain/usr \
     && make -j64 \
-    make install
+    && make install
 
 WORKDIR /sources/ninja
 RUN ./configure.py --bootstrap \
@@ -283,15 +285,17 @@ WORKDIR /sources/gawk
 RUN sed -ie 's|extras||' Makefile.in \
     && ./configure \
         --prefix=/toolchain/usr \
+        --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
         --disable-extensions \
     && make -j64 \
-    make install
+    && make install
 
 WORKDIR /sources/grep
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
@@ -305,14 +309,16 @@ RUN ./configure \
 WORKDIR /sources/patch
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
 WORKDIR /sources/sed
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
@@ -321,14 +327,16 @@ RUN ./configure \
 WORKDIR /sources/coreutils
 RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
 WORKDIR /sources/findutils
 RUN ./configure \
         --prefix=/toolchain/usr \
-	--host=${MUSL_TRIPLE} \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
@@ -356,8 +364,8 @@ COPY ccachedeps /ccachedeps
 RUN ln -s /ccachedeps/_deps _deps \
     && cmake \
         -D CMAKE_BUILD_TYPE=Release \
-	-D CMAKE_INSTALL_PREFIX=/toolchain/usr \
-	-D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
+        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
+        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
     && make -j64 \
     && make install
 
@@ -367,50 +375,54 @@ RUN ln -s /ccachedeps/_deps _deps \
 ####
 FROM base AS oci-compat
 RUN mkdir -p /compat/bin
-RUN ln -s /toolchain/bin/sh /compat/bin/sh
+RUN ln -sv /toolchain/bin/sh /compat/bin/sh
 
 ####
 # final
 ####
 FROM scratch
-COPY --from=oci-compat /compat/bin /bin
 COPY --from=toolchain /toolchain /toolchain
+COPY --from=oci-compat /compat/bin /bin
 ENV PATH="/toolchain/usr/bin"
-RUN false
+ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
+ENV CCACHE_DIR=/ccache
+ARG CCACHE_BUILD=ON
 
-RUN mkdir /usr /usr/bin /usr/lib /tmp
-RUN ln -sf usr/bin /bin
-RUN ln -s usr/lib /lib
-RUN ln -s lib /usr/lib64
+RUN mkdir usr usr/bin usr/lib tmp \
+    && ln -sv usr/bin bin \
+    && ln -sv usr/lib lib \
+    && ln -sv lib usr/lib64
 
 # Install linux headers (needed for musl libc)
 WORKDIR /sources/linux
-RUN make LLVM=1 -j64 headers && \
-    find usr/include -type f ! -name '*.h' -delete && \
-    cp -rv usr/include /usr/include
+RUN make LLVM=1 -j64 headers \
+    && find usr/include -type f ! -name '*.h' -delete \
+    && cp -rv usr/include /usr/include
 
 # Install libc
 WORKDIR /sources/musl
-RUN ./configure CC="clang" AR="llvm-ar" RANLIB="llvm-ranlib" --target="${MUSL_TRIPLE}" --prefix="/usr" && \
-    make -j64 && \
-    make install
+RUN ./configure --prefix="/usr" \
+    && make -j64 \
+    && make install
 RUN ln -sf libc.so /usr/lib/ld-musl-x86_64.so.1
 RUN ln -sf ../lib/libc.so /usr/bin/ldd
 RUN echo "/usr/lib/${MUSL_TRIPLE}\n/usr/lib" > /etc/ld-musl-x86_64.path
 
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
-COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage2.cmake /
+COPY configs/common.cmake /
 COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-toolchain \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
     && cmake -S llvm -B build -G Ninja \
         -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
         -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
-        -D MUSL_SYSROOT=${MUSL_SYSROOT} \
-        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
-        -C /musl-stage2.cmake \
-        -C /musl-base.cmake \
+        -D CMAKE_INSTALL_PREFIX=/usr \
+        -D CMAKE_SYSROOT=/toolchain \
+        -D RUNTIMES_${MUSL_TRIPLE}_LIBCXX_HAS_MUSL_LIBC=ON \
+        -D LLVM_HOST_TRIPLE=${MUSL_TRIPLE} \
+        -D LLVM_BUILTIN_TARGETS=${MUSL_TRIPLE} \
+        -D LLVM_RUNTIME_TARGETS=${MUSL_TRIPLE} \
         -C /common.cmake \
     && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes
@@ -419,28 +431,35 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-toolchain \
 # make/cmake/ninja and other binaries need to be built last-ish
 
 WORKDIR /sources/make
-RUN ln -s lld /toolchain/usr/bin/ld
-RUN ln -s llvm-ar /toolchain/usr/bin/ar
-RUN ./configure --prefix=/usr --host=${MUSL_TRIPLE} \
+RUN ./configure \
+        --prefix=/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
     && make -j64 \
     && make install
 
 WORKDIR /sources/cmake
-RUN cmake -B build -D CMAKE_INSTALL_PREFIX=/usr -D CMAKE_USE_OPENSSL=OFF \
+RUN cmake \
+        -B build \
+        -D CMAKE_INSTALL_PREFIX=/usr \
+        -D CMAKE_USE_OPENSSL=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
 
 WORKDIR /sources/python
 RUN ./configure \
         --prefix=/usr \
-	--build=${MUSL_TRIPLE} \
-	--host=${MUSL_TRIPLE} \
-	--enable-shared \
-	--without-ensurepip \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --enable-shared \
+        --without-ensurepip \
     && make -j64 \
     && make install
 
 WORKDIR /sources/ninja
-RUN cmake -B build -D BUILD_TESTING=OFF \
+RUN cmake \
+        -B build \
+        -D CMAKE_INSTALL_PREFIX=/usr \
+        -D BUILD_TESTING=OFF \
     && cmake --build build --parallel 64 \
-    && install -m 0755 ./ninja /usr/bin/ninja
+    && cmake --build build --target install
