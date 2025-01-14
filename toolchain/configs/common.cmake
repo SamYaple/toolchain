@@ -40,8 +40,6 @@ set(_LLVM_ENABLE_RUNTIMES
 set(_LLVM_TOOLCHAIN_TOOLS
   dsymutil
   llvm-ar
-  llvm-config
-  FileCheck
   llvm-nm
   llvm-objcopy
   llvm-objdump
@@ -49,10 +47,15 @@ set(_LLVM_TOOLCHAIN_TOOLS
   llvm-size
   llvm-strings
   llvm-strip
+
+  # this is needed to bootstrap rustc later (without recompiling llvm)
+  llvm-config
+  FileCheck
 )
 
 set(_LLVM_DISTRIBUTION_COMPONENTS
   clang-resource-headers
+  llvm-headers
   builtins
   runtimes
   ${_LLVM_ENABLE_PROJECTS}
@@ -71,31 +74,22 @@ set(CLANG_DEFAULT_LINKER     "lld"         CACHE STRING "")
 set(CLANG_DEFAULT_RTLIB      "compiler-rt" CACHE STRING "")
 set(CLANG_DEFAULT_UNWINDLIB  "libunwind"   CACHE STRING "")
 
-# Recommended options for build performance (why is it not default?)
-set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "")
+# Recommended option for build performance (why is it not default?)
+set(LLVM_OPTIMIZED_TABLEGEN      ON  CACHE BOOL "")
 
-# Disable docs targets
-set(CLANG_INCLUDE_DOCS OFF CACHE BOOL "")
-set(LLVM_INCLUDE_DOCS  OFF CACHE BOOL "")
-
-# Disable tests targets
-set(CLANG_INCLUDE_TESTS OFF CACHE BOOL "")
-set(LLVM_INCLUDE_TESTS  OFF CACHE BOOL "")
-
-# Disable extras
+# Need to disable these for musl build (TODO: revisit this)
+set(LLVM_INCLUDE_TESTS           OFF CACHE BOOL "")
 set(CLANG_ENABLE_ARCMT           OFF CACHE BOOL "")
 set(CLANG_ENABLE_STATIC_ANALYZER OFF CACHE BOOL "")
-#set(CLANG_PLUGIN_SUPPORT         OFF CACHE BOOL "")
-#set(LLVM_INCLUDE_BENCHMARKS      OFF CACHE BOOL "")
-#set(LLVM_INCLUDE_EXAMPLES        OFF CACHE BOOL "")
 
 # Ensure each target is isolated. Rather than being dumped into `/lib`, we will
 # install it into `/lib/x86_64-unknown-linux-musl`, for example.
 set(COMPILER_RT_DEFAULT_TARGET_ONLY    OFF CACHE BOOL "")
 set(LLVM_ENABLE_PER_TARGET_RUNTIME_DIR ON  CACHE BOOL "")
 set(LLVM_USE_RELATIVE_PATHS_IN_FILES   ON  CACHE BOOL "")
-set(LLVM_INSTALL_TOOLCHAIN_ONLY        OFF CACHE BOOL "")
 set(LLVM_INSTALL_UTILS                 ON  CACHE BOOL "")
+set(LLVM_INSTALL_CCTOOLS_SYMLINKS      ON  CACHE BOOL "")
+set(LLVM_INSTALL_BINUTILS_SYMLINKS     ON  CACHE BOOL "")
 
 # Expose `distribution` and `install-distribution` targets. These will be
 # available as `stage2-distribution` and `stage2-install-distribution` targets

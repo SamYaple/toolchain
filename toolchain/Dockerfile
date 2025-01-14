@@ -151,20 +151,21 @@ RUN mkdir usr usr/bin usr/lib etc \
 # We need the linux headers to build musl (unlike with glibc). We build them
 # using our bootstrap compiler. TODO: detail the what/when/hows of this process
 WORKDIR /sources/linux
-RUN make HOSTCFLAGS="--sysroot=${GLIBC_SYSROOT}" HOSTLDFLAGS="--sysroot=${GLIBC_SYSROOT}" LLVM=1 -j64 headers && \
-    find usr/include -type f ! -name '*.h' -delete && \
-    cp -rv usr/include /toolchain/usr/include
+RUN make HOSTCFLAGS="--sysroot=${GLIBC_SYSROOT}" HOSTLDFLAGS="--sysroot=${GLIBC_SYSROOT}" LLVM=1 -j64 headers \
+    && find usr/include -type f ! -name '*.h' -delete \
+    && cp -rv usr/include ${MUSL_SYSROOT}/usr/include
 
 # Build and install musl libc using our bootstrap tools. A small twist is having
 # `/toolchain/etc/ld-musl-x86_64.path` look into `/toolchain/usr` vs `/usr`.
 # This further isolates our new toolchain from any host files.
 WORKDIR /sources/musl
-RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="/toolchain/usr" && \
-    make -j64 && \
-    make install
-RUN ln -svf libc.so /toolchain/usr/lib/ld-musl-x86_64.so.1
-RUN ln -svf ../lib/libc.so /toolchain/usr/bin/ldd
-RUN echo "/toolchain/usr/lib/${MUSL_TRIPLE}\n/toolchain/usr/lib" > /toolchain/etc/ld-musl-x86_64.path
+RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="${MUSL_SYSROOT}/usr" \
+    && make -j64 \
+    && make install
+RUN echo "${MUSL_SYSROOT}/usr/lib"                  >> ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
+    && echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
+    && ln -svf libc.so ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
+    && ln -svf ../lib/libc.so ${MUSL_SYSROOT}/usr/bin/ldd
 
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage1.cmake configs/musl-stage2.cmake /
@@ -205,11 +206,12 @@ RUN ln -sv clang           bin/cc \
 
 # only needed because im applying patches to some of these source trees
 WORKDIR /sources/patch
-ENV PATH="/toolchain/usr/bin:${PATH}"
-ENV CFLAGS="--sysroot=/toolchain"
-ENV CXXFLAGS="${CFLAGS}"
+ENV PATH="${MUSL_SYSROOT}/usr/bin:${PATH}"
+ENV CFLAGS="--sysroot=${MUSL_SYSROOT}"
+ENV CXXFLAGS="--sysroot=${MUSL_SYSROOT}"
+ENV LDFLAGS="--sysroot=${MUSL_SYSROOT}"
 RUN ./configure \
-        --prefix=/toolchain/usr \
+        --prefix=${MUSL_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
     && make -j64 \
@@ -224,11 +226,10 @@ RUN ./configure \
 FROM base AS toolchain
 COPY --from=stage0 ${MUSL_SYSROOT} ${MUSL_SYSROOT}
 RUN ln -sv ${MUSL_SYSROOT} /toolchain
-ENV PATH="/toolchain/usr/bin:${PATH}"
-
+ENV PATH="${MUSL_SYSROOT}/usr/bin:${PATH}"
 ENV CFLAGS="--sysroot=${MUSL_SYSROOT}"
-ENV CXXFLAGS="${CFLAGS}"
-ENV LDFLAGS="${CFLAGS}"
+ENV CXXFLAGS="--sysroot=${MUSL_SYSROOT}"
+ENV LDFLAGS="--sysroot=${MUSL_SYSROOT}"
 
 WORKDIR /sources/make
 COPY patches/make /patches/make
@@ -304,13 +305,13 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 WORKDIR /sources/rustc
 COPY configs/rustc-config.toml /config.toml
 RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
-    && ln -sv /toolchain/usr/lib/crt1.o  /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/Scrt1.o /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/rcrt1.o /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/crti.o  /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/crtn.o  /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/libc.a  /usr/lib/ \
-    && ln -sv /toolchain/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/crt1.o  /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/Scrt1.o /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/rcrt1.o /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/crti.o  /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/crtn.o  /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/libc.a  /usr/lib/ \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
     ./configure \
 	--bootstrap-cache-path=/rustbootstrapdeps \
