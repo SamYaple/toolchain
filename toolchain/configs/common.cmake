@@ -40,6 +40,8 @@ set(_LLVM_ENABLE_RUNTIMES
 set(_LLVM_TOOLCHAIN_TOOLS
   dsymutil
   llvm-ar
+  llvm-config
+  FileCheck
   llvm-nm
   llvm-objcopy
   llvm-objdump
@@ -83,15 +85,17 @@ set(LLVM_INCLUDE_TESTS  OFF CACHE BOOL "")
 # Disable extras
 set(CLANG_ENABLE_ARCMT           OFF CACHE BOOL "")
 set(CLANG_ENABLE_STATIC_ANALYZER OFF CACHE BOOL "")
-set(CLANG_PLUGIN_SUPPORT         OFF CACHE BOOL "")
-set(LLVM_INCLUDE_BENCHMARKS      OFF CACHE BOOL "")
-set(LLVM_INCLUDE_EXAMPLES        OFF CACHE BOOL "")
+#set(CLANG_PLUGIN_SUPPORT         OFF CACHE BOOL "")
+#set(LLVM_INCLUDE_BENCHMARKS      OFF CACHE BOOL "")
+#set(LLVM_INCLUDE_EXAMPLES        OFF CACHE BOOL "")
 
 # Ensure each target is isolated. Rather than being dumped into `/lib`, we will
 # install it into `/lib/x86_64-unknown-linux-musl`, for example.
 set(COMPILER_RT_DEFAULT_TARGET_ONLY    OFF CACHE BOOL "")
 set(LLVM_ENABLE_PER_TARGET_RUNTIME_DIR ON  CACHE BOOL "")
 set(LLVM_USE_RELATIVE_PATHS_IN_FILES   ON  CACHE BOOL "")
+set(LLVM_INSTALL_TOOLCHAIN_ONLY        OFF CACHE BOOL "")
+set(LLVM_INSTALL_UTILS                 ON  CACHE BOOL "")
 
 # Expose `distribution` and `install-distribution` targets. These will be
 # available as `stage2-distribution` and `stage2-install-distribution` targets

@@ -226,34 +226,31 @@ COPY --from=stage0 ${MUSL_SYSROOT} ${MUSL_SYSROOT}
 RUN ln -sv ${MUSL_SYSROOT} /toolchain
 ENV PATH="/toolchain/usr/bin:${PATH}"
 
-ENV CFLAGS="--sysroot=/toolchain"
+ENV CFLAGS="--sysroot=${MUSL_SYSROOT}"
 ENV CXXFLAGS="${CFLAGS}"
+ENV LDFLAGS="${CFLAGS}"
 
 WORKDIR /sources/make
 COPY patches/make /patches/make
-RUN patch -p1 < /patches/make/fix-bootstrap.patch && \
-    ./configure \
-        --prefix=/toolchain/usr \
+RUN patch -p1 < /patches/make/fix-bootstrap.patch \
+    && ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
     && ./build.sh \
     && ./make install
 
-WORKDIR /sources/bash
-COPY patches/bash /patches/bash
-RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
-    ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-        --without-bash-malloc \
+WORKDIR /sources/zlib
+COPY patches/zlib /patches/zlib
+RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
+    && ./configure --prefix=${MUSL_SYSROOT}/usr \
     && make -j64 \
     && make install
-RUN ln -sv bash /toolchain/bin/sh
+RUN rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
 
 WORKDIR /sources/python
 RUN ./configure \
-        --prefix=/toolchain/usr \
+        --prefix=${MUSL_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
         --enable-shared \
@@ -263,7 +260,7 @@ RUN ./configure \
 
 WORKDIR /sources/cmake
 RUN ./bootstrap --parallel=64 -- \
-        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
         -D CMAKE_USE_OPENSSL=OFF \
     && make -j64 \
     && make install
@@ -271,7 +268,79 @@ RUN ./bootstrap --parallel=64 -- \
 WORKDIR /sources/ninja
 RUN ./configure.py --bootstrap \
     && ./ninja all \
-    && install -m 0755 ./ninja /toolchain/usr/bin/ninja
+    && install -m 0755 ./ninja ${MUSL_SYSROOT}/usr/bin/ninja
+
+WORKDIR /sources/ccache/build
+# TODO: I need to find a better way to provide these deps to ccahe during build
+COPY ccachedeps /ccachedeps
+RUN ln -s /ccachedeps/_deps _deps \
+    && cmake \
+        -D CMAKE_BUILD_TYPE=Release \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/llvm-project/llvm-libgcc
+RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
+    && clang \
+        -nostdlib \
+	--sysroot=${MUSL_SYSROOT} \
+        -Wl,--version-script,gcc_s.ver \
+	-Wl,--whole-archive \
+	${MUSL_SYSROOT}/usr/lib/clang/19/lib/${MUSL_TRIPLE}/libclang_rt.builtins.a \
+	${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libunwind.a \
+	-Wl,-soname,libgcc_s.so.1.0 \
+	-lc \
+	-shared \
+	-o libgcc_s.so.1.0 \
+    && install -m 0644 ./libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
+    && ln -sv libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
+    && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install -y curl
+
+WORKDIR /sources/rustc
+COPY configs/rustc-config.toml /config.toml
+RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
+    && ln -sv /toolchain/usr/lib/crt1.o  /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/Scrt1.o /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/rcrt1.o /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/crti.o  /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/crtn.o  /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/libc.a  /usr/lib/ \
+    && ln -sv /toolchain/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
+    ./configure \
+	--bootstrap-cache-path=/rustbootstrapdeps \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --target=${MUSL_TRIPLE} \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --llvm-cflags=${CFLAGS} \
+        --llvm-cxxflags=${CXXFLAGS} \
+        --llvm-ldflags=${CXXFLAGS} \
+    && sed \
+        -e "s|\${MUSL_TRIPLE}|${MUSL_TRIPLE}|g" \
+        -e "s|\${MUSL_SYSROOT}|${MUSL_SYSROOT}|g" \
+	/config.toml > config.toml \
+    && make -j64 \
+    && make install
+RUN rm -fv /etc/ld-musl-x86_64.path /lib/ld-musl-x86_64.so.1 /usr/lib/crt1.o /usr/lib/Scrt1.o /usr/lib/rcrt1.o /usr/lib/crti.o /usr/lib/crtn.o /usr/lib/libc.a
+
+#WORKDIR /sources/bash
+#COPY patches/bash /patches/bash
+#RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
+#    ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#        --without-bash-malloc \
+#    && make -j64 \
+#    && make install
+#RUN ln -sv bash /toolchain/bin/sh
+
 
 #WORKDIR /sources/m4
 #RUN ./configure
@@ -280,24 +349,24 @@ RUN ./configure.py --bootstrap \
 #    && make -j64 \
 #    && make install
 
-WORKDIR /sources/gawk
-# TODO: convert this to a patch
-RUN sed -ie 's|extras||' Makefile.in \
-    && ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-        --disable-extensions \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/gawk
+## TODO: convert this to a patch
+#RUN sed -ie 's|extras||' Makefile.in \
+#    && ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#        --disable-extensions \
+#    && make -j64 \
+#    && make install
 
-WORKDIR /sources/grep
-RUN ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/grep
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 #WORKDIR /sources/gzip
 #RUN ./configure \
@@ -306,39 +375,39 @@ RUN ./configure \
 #    && make -j64 \
 #    && make install
 
-WORKDIR /sources/patch
-RUN ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/patch
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
-WORKDIR /sources/sed
-RUN ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/sed
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 ## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
 ##       building as root currently
-WORKDIR /sources/coreutils
-RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/coreutils
+#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
-WORKDIR /sources/findutils
-RUN ./configure \
-        --prefix=/toolchain/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/findutils
+#RUN ./configure \
+#        --prefix=/toolchain/usr \
+#        --build=${MUSL_TRIPLE} \
+#        --host=${MUSL_TRIPLE} \
+#    && make -j64 \
+#    && make install
 
 ## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
 ##       building as root currently
@@ -358,55 +427,65 @@ RUN ./configure \
 #    && make install
 #RUN rm /toolchain/usr/lib/liblzma.la
 
-WORKDIR /sources/ccache/build
-# TODO: I need to find a better way to provide these deps to ccahe during build
-COPY ccachedeps /ccachedeps
-RUN ln -s /ccachedeps/_deps _deps \
-    && cmake \
-        -D CMAKE_BUILD_TYPE=Release \
-        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
-        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/ccache/build
+## TODO: I need to find a better way to provide these deps to ccahe during build
+#COPY ccachedeps /ccachedeps
+#RUN ln -s /ccachedeps/_deps _deps \
+#    && cmake \
+#        -D CMAKE_BUILD_TYPE=Release \
+#        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
+#        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
+#    && make -j64 \
+#    && make install
 
 ####
 # OCI/docker/podman need /bin/sh available, but only /toolchain will exist in
 # the root of our final FROM scratch image.
 ####
 FROM base AS oci-compat
-RUN mkdir -p /compat/bin
-RUN ln -sv /toolchain/bin/sh /compat/bin/sh
+RUN mkdir -p /compat/hack /compat/bin
+RUN ln -sv /sysroots/stage0/usr/bin/sh /compat/bin/sh
+RUN ln -sv /sysroots/stage0 /compat/hack/toolchain
 
 ####
 # final
 ####
 FROM scratch
-COPY --from=toolchain /toolchain /toolchain
-COPY --from=oci-compat /compat/bin /bin
-ENV PATH="/toolchain/usr/bin"
-ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
-ENV CCACHE_DIR=/ccache
 ARG CCACHE_BUILD=ON
+ENV CCACHE_DIR=/ccache
+ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
+ENV STAGE0_SYSROOT=/sysroots/stage0
+ENV STAGE1_SYSROOT=/sysroots/stage1
 
-RUN mkdir usr usr/bin usr/lib tmp \
-    && ln -sv usr/bin bin \
+COPY --from=toolchain /sysroots/musl ${STAGE0_SYSROOT}
+COPY --from=oci-compat /compat/bin /bin
+COPY --from=oci-compat /compat/hack/ /
+ENV PATH="${STAGE0_SYSROOT}/usr/bin"
+
+RUN mkdir /tmp
+
+WORKDIR ${STAGE1_SYSROOT}
+RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv usr/lib lib \
-    && ln -sv lib usr/lib64
+    && ln -sv usr/bin bin \
+    && ln -sv lib usr/lib64 \
+    && ln -sv . toolchain
 
 # Install linux headers (needed for musl libc)
 WORKDIR /sources/linux
 RUN make LLVM=1 -j64 headers \
     && find usr/include -type f ! -name '*.h' -delete \
-    && cp -rv usr/include /usr/include
+    && cp -rv usr/include ${STAGE1_SYSROOT}/usr/include
 
 # Install libc
 WORKDIR /sources/musl
-RUN ./configure --prefix="/usr" \
+RUN ./configure --prefix="${STAGE1_SYSROOT}/usr" \
     && make -j64 \
     && make install
-RUN ln -sf libc.so /usr/lib/ld-musl-x86_64.so.1
-RUN ln -sf ../lib/libc.so /usr/bin/ldd
-RUN echo "/usr/lib/${MUSL_TRIPLE}\n/usr/lib" > /etc/ld-musl-x86_64.path
+RUN echo "${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${STAGE1_SYSROOT}/etc/ld-musl-x86_64.path \
+    && echo "${STAGE1_SYSROOT}/usr/lib"            >> ${STAGE1_SYSROOT}/etc/ld-musl-x86_64.path \
+    && ln -sf libc.so ${STAGE1_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
+    && ln -sf ../lib/libc.so ${STAGE1_SYSROOT}/usr/bin/ldd
 
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
@@ -417,22 +496,26 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-toolchain \
     && cmake -S llvm -B build -G Ninja \
         -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
         -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
-        -D CMAKE_INSTALL_PREFIX=/usr \
-        -D CMAKE_SYSROOT=/toolchain \
-        -D RUNTIMES_${MUSL_TRIPLE}_LIBCXX_HAS_MUSL_LIBC=ON \
+        -D CMAKE_SYSROOT=${STAGE1_SYSROOT} \
+        -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
         -D LLVM_HOST_TRIPLE=${MUSL_TRIPLE} \
         -D LLVM_BUILTIN_TARGETS=${MUSL_TRIPLE} \
         -D LLVM_RUNTIME_TARGETS=${MUSL_TRIPLE} \
+        -D RUNTIMES_${MUSL_TRIPLE}_LIBCXX_HAS_MUSL_LIBC=ON \
         -C /common.cmake \
     && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes
+
+# We can now update our /toolchain symlink to link against stage1 libs. All of
+# the binaries still live in stage0 for now.
+RUN ln -svnf ${STAGE1_SYSROOT} /toolchain
 
 # TODO: Add all needed libs before the tools that need them
 # make/cmake/ninja and other binaries need to be built last-ish
 
 WORKDIR /sources/make
 RUN ./configure \
-        --prefix=/usr \
+        --prefix=${STAGE1_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
     && make -j64 \
@@ -441,14 +524,14 @@ RUN ./configure \
 WORKDIR /sources/cmake
 RUN cmake \
         -B build \
-        -D CMAKE_INSTALL_PREFIX=/usr \
+        -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
         -D CMAKE_USE_OPENSSL=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
 
 WORKDIR /sources/python
 RUN ./configure \
-        --prefix=/usr \
+        --prefix=${STAGE1_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
         --enable-shared \
@@ -459,7 +542,7 @@ RUN ./configure \
 WORKDIR /sources/ninja
 RUN cmake \
         -B build \
-        -D CMAKE_INSTALL_PREFIX=/usr \
+        -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
         -D BUILD_TESTING=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install

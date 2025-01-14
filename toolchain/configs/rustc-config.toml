@@ -1,0 +1,30 @@
+profile = 'dist'
+
+[llvm]
+download-ci-llvm = false
+
+cflags = '--sysroot=${MUSL_SYSROOT}'
+cxxflags = '--sysroot=${MUSL_SYSROOT}'
+ldflags = '--sysroot=${MUSL_SYSROOT}'
+
+[build]
+build = '${MUSL_TRIPLE}'
+host = ['${MUSL_TRIPLE}']
+target = ['${MUSL_TRIPLE}']
+
+bootstrap-cache-path = '/rustbootstrapdeps'
+docs = false
+
+[install]
+prefix = '${MUSL_SYSROOT}/usr'
+sysconfdir = 'etc'
+
+[rust]
+llvm-libunwind = 'system'
+lto = 'off'
+
+[target.${MUSL_TRIPLE}]
+llvm-config = '${MUSL_SYSROOT}/usr/bin/llvm-config'
+crt-static = false
+
+[dist]

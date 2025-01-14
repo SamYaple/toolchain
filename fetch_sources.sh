@@ -27,6 +27,9 @@ FILES=(
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz
     https://www.python.org/ftp/python/3.13.1/Python-3.13.1.tgz.asc
 
+    https://static.rust-lang.org/dist/rustc-1.84.0-src.tar.xz
+    https://static.rust-lang.org/dist/rustc-1.84.0-src.tar.xz.asc
+
     https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2.tar.gz
     https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2.tar.gz.asc
 
