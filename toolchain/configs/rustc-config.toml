@@ -24,7 +24,7 @@ llvm-libunwind = 'system'
 lto = 'off'
 
 [target.${MUSL_TRIPLE}]
-llvm-config = '${MUSL_SYSROOT}/usr/bin/llvm-config'
+llvm-config = '/opt/build/tools/clang/stage2-bins/bin/llvm-config'
 crt-static = false
 
 [dist]

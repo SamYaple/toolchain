@@ -47,15 +47,10 @@ set(_LLVM_TOOLCHAIN_TOOLS
   llvm-size
   llvm-strings
   llvm-strip
-
-  # this is needed to bootstrap rustc later (without recompiling llvm)
-  llvm-config
-  FileCheck
 )
 
 set(_LLVM_DISTRIBUTION_COMPONENTS
   clang-resource-headers
-  llvm-headers
   builtins
   runtimes
   ${_LLVM_ENABLE_PROJECTS}
@@ -98,7 +93,7 @@ set(CLANG_BOOTSTRAP_TARGETS ${_CLANG_BOOTSTRAP_TARGETS} CACHE STRING "")
 # Minimize the set of tools and utilities created to a minimal set. This saves
 # space and cpu cycles, but is missing some of the cooler tools like bolt and
 # even lto currently.
-set(LLVM_TOOLCHAIN_TOOLS         ${_LLVM_TOOLCHAIN_TOOLS}         CACHE STRING "")
+set(LLVM_TOOLCHAIN_TOOLS     "${_LLVM_TOOLCHAIN_TOOLS};FileCheck" CACHE STRING "")
 set(LLVM_DISTRIBUTION_COMPONENTS ${_LLVM_DISTRIBUTION_COMPONENTS} CACHE STRING "")
 set(LLVM_ENABLE_PROJECTS         ${_LLVM_ENABLE_PROJECTS}         CACHE STRING "")
 set(LLVM_ENABLE_RUNTIMES         ${_LLVM_ENABLE_RUNTIMES}         CACHE STRING "")

@@ -162,8 +162,8 @@ WORKDIR /sources/musl
 RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="${MUSL_SYSROOT}/usr" \
     && make -j64 \
     && make install
-RUN echo "${MUSL_SYSROOT}/usr/lib"                  >> ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
-    && echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
+RUN echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
+    && echo "${MUSL_SYSROOT}/usr/lib"            >> ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
     && ln -svf libc.so ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
     && ln -svf ../lib/libc.so ${MUSL_SYSROOT}/usr/bin/ldd
 
@@ -173,7 +173,7 @@ COPY patches/llvm-project /patches/llvm-project
 RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-stage0 \
     patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
     && patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
-    && cmake -S llvm -B build -G Ninja \
+    && cmake -S llvm -B /opt/build -G Ninja \
         -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
         -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
         -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
@@ -183,10 +183,10 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-stage0 \
         -C /musl-stage1.cmake \
         -C /musl-base.cmake \
         -C /common.cmake \
-    && cmake --build build --target runtimes \
-    && cmake --build build --target install-runtimes \
-    && cmake --build build --target stage2-distribution \
-    && cmake --build build --target stage2-install-distribution
+    && cmake --build /opt/build --target runtimes \
+    && cmake --build /opt/build --target install-runtimes \
+    && cmake --build /opt/build --target stage2-distribution \
+    && cmake --build /opt/build --target stage2-install-distribution
 
 # I could use the cmake build to setup these symlinks, but for now I am doing it
 # directly. This will allow most of the remaining builds to detect which tools
@@ -241,6 +241,7 @@ RUN patch -p1 < /patches/make/fix-bootstrap.patch \
     && ./build.sh \
     && ./make install
 
+# rust bootstrap needs to extract tar.gz archives from pythons tarfile
 WORKDIR /sources/zlib
 COPY patches/zlib /patches/zlib
 RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
@@ -249,6 +250,7 @@ RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
     && make install
 RUN rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
 
+# rust bootstrap uses python
 WORKDIR /sources/python
 RUN ./configure \
         --prefix=${MUSL_SYSROOT}/usr \
@@ -259,42 +261,42 @@ RUN ./configure \
     && make -j64 \
     && make install
 
-WORKDIR /sources/cmake
-RUN ./bootstrap --parallel=64 -- \
-        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-        -D CMAKE_USE_OPENSSL=OFF \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/ninja
-RUN ./configure.py --bootstrap \
-    && ./ninja all \
-    && install -m 0755 ./ninja ${MUSL_SYSROOT}/usr/bin/ninja
-
-WORKDIR /sources/ccache/build
-# TODO: I need to find a better way to provide these deps to ccahe during build
-COPY ccachedeps /ccachedeps
-RUN ln -s /ccachedeps/_deps _deps \
-    && cmake \
-        -D CMAKE_BUILD_TYPE=Release \
-        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
-    && make -j64 \
-    && make install
+#WORKDIR /sources/cmake
+#RUN ./bootstrap --parallel=64 -- \
+#        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+#        -D CMAKE_USE_OPENSSL=OFF \
+#    && make -j64 \
+#    && make install
+#
+#WORKDIR /sources/ninja
+#RUN ./configure.py --bootstrap \
+#    && ./ninja all \
+#    && install -m 0755 ./ninja ${MUSL_SYSROOT}/usr/bin/ninja
+#
+#WORKDIR /sources/ccache/build
+## TODO: I need to find a better way to provide these deps to ccahe during build
+#COPY ccachedeps /ccachedeps
+#RUN ln -s /ccachedeps/_deps _deps \
+#    && cmake \
+#        -D CMAKE_BUILD_TYPE=Release \
+#        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+#        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
+#    && make -j64 \
+#    && make install
 
 WORKDIR /sources/llvm-project/llvm-libgcc
 RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && clang \
         -nostdlib \
-	--sysroot=${MUSL_SYSROOT} \
+        --sysroot=${MUSL_SYSROOT} \
         -Wl,--version-script,gcc_s.ver \
-	-Wl,--whole-archive \
-	${MUSL_SYSROOT}/usr/lib/clang/19/lib/${MUSL_TRIPLE}/libclang_rt.builtins.a \
-	${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libunwind.a \
-	-Wl,-soname,libgcc_s.so.1.0 \
-	-lc \
-	-shared \
-	-o libgcc_s.so.1.0 \
+        -Wl,--whole-archive \
+        ${MUSL_SYSROOT}/usr/lib/clang/19/lib/${MUSL_TRIPLE}/libclang_rt.builtins.a \
+        ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libunwind.a \
+        -Wl,-soname,libgcc_s.so.1.0 \
+        -lc \
+        -shared \
+        -o libgcc_s.so.1.0 \
     && install -m 0644 ./libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
     && ln -sv libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
     && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so
@@ -302,8 +304,11 @@ RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install -y curl
 
+COPY --from=stage0 /opt/build /opt/build
+
 WORKDIR /sources/rustc
 COPY configs/rustc-config.toml /config.toml
+# TODO: patch rust toolchain to search `/toolchain` like the llvm patch
 RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
     && ln -sv ${MUSL_SYSROOT}/usr/lib/crt1.o  /usr/lib/ \
     && ln -sv ${MUSL_SYSROOT}/usr/lib/Scrt1.o /usr/lib/ \
@@ -314,7 +319,7 @@ RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
     && ln -sv ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
     ./configure \
-	--bootstrap-cache-path=/rustbootstrapdeps \
+        --bootstrap-cache-path=/rustbootstrapdeps \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
         --target=${MUSL_TRIPLE} \
@@ -325,7 +330,7 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
     && sed \
         -e "s|\${MUSL_TRIPLE}|${MUSL_TRIPLE}|g" \
         -e "s|\${MUSL_SYSROOT}|${MUSL_SYSROOT}|g" \
-	/config.toml > config.toml \
+        /config.toml > config.toml \
     && make -j64 \
     && make install
 RUN rm -fv /etc/ld-musl-x86_64.path /lib/ld-musl-x86_64.so.1 /usr/lib/crt1.o /usr/lib/Scrt1.o /usr/lib/rcrt1.o /usr/lib/crti.o /usr/lib/crtn.o /usr/lib/libc.a

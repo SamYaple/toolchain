@@ -21,6 +21,9 @@ FILES=(
     https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.8.tar.xz
     https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.8.tar.sign
 
+    https://www.kernel.org/pub/software/scm/git/git-2.48.1.tar.xz
+    https://www.kernel.org/pub/software/scm/git/git-2.48.1.tar.sign
+
     https://musl.libc.org/releases/musl-1.2.5.tar.gz
     https://musl.libc.org/releases/musl-1.2.5.tar.gz.asc
 
