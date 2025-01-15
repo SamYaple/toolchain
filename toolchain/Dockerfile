@@ -242,6 +242,7 @@ RUN patch -p1 < /patches/make/fix-bootstrap.patch \
     && ./make install
 
 # rust bootstrap needs to extract tar.gz archives from pythons tarfile
+# perl also needs this (to link against the system zlib)
 WORKDIR /sources/zlib
 COPY patches/zlib /patches/zlib
 RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
@@ -249,6 +250,47 @@ RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
     && make -j64 \
     && make install
 RUN rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
+
+# perl wants system bzip2
+WORKDIR /sources/bzip2
+RUN sed -i -e 's@CC=gcc@CC=cc@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefile* \
+    && make -f Makefile-libbz2_so \
+    && make clean \
+    && make -j64 \
+    && make PREFIX=${MUSL_SYSROOT}/usr install \
+    && cp -av libbz2.so.* ${MUSL_SYSROOT}/usr/lib \
+    && ln -sv libbz2.so.1.0.8 ${MUSL_SYSROOT}/usr/lib/libbz2.so \
+    && cp -v bzip2-shared /usr/bin/bzip2 \
+    && ln -sfv bzip2 ${MUSL_SYSROOT}/usr/bin/bzcat \
+    && ln -sfv bzip2 ${MUSL_SYSROOT}/usr/bin/bunzip2 \
+    && rm -fv ${MUSL_SYSROOT}/usr/lib/libbz2.a
+
+# openssl needs perl
+WORKDIR /sources/perl
+RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
+    && sh Configure -des \
+        -D libc="${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libc.so" \
+        -D prefix=${MUSL_SYSROOT}/usr \
+        -D vendorprefix=${MUSL_SYSROOT}/usr \
+        -D privlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/core_perl \
+        -D archlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/core_perl \
+        -D sitelib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/site_perl \
+        -D sitearch=${MUSL_SYSROOT}/usr/lib/perl5/5.40/site_perl \
+        -D vendorlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/vendor_perl \
+        -D vendorarch=${MUSL_SYSROOT}/usr/lib/perl5/5.40/vendor_perl \
+        -D pager="${MUSL_SYSROOT}/usr/bin/less -isR" \
+        -D useshrplib \
+        -D usethreads \
+    && make -j64 \
+    && make install
+
+# rust stage3 tries to compile openssl-sys. Install it early so python
+WORKDIR /sources/openssl
+RUN CC=cc CXX=cxx ./config --prefix=${MUSL_SYSROOT}/usr --openssldir=${MUSL_SYSROOT}/etc/ssl --libdir=lib shared zlib-dynamic \
+    && make -j64 \
+    && sed -i '/INSTALL_LIBS/s/libcrypto.a libssl.a//' Makefile \
+    && make install_sw \
+    && make install_ssldirs
 
 # rust bootstrap uses python
 WORKDIR /sources/python
@@ -260,6 +302,13 @@ RUN ./configure \
         --without-ensurepip \
     && make -j64 \
     && make install
+
+# rust stage3 needs pkg-config during openssl-sys install
+WORKDIR /sources/pkgconf
+RUN ./configure --prefix=${MUSL_SYSROOT}/usr --disable-static \
+    && make -j64 \
+    && make install
+RUN ln -sv pkgconf ${MUSL_SYSROOT}/usr/bin/pkg-config
 
 #WORKDIR /sources/cmake
 #RUN ./bootstrap --parallel=64 -- \
@@ -302,20 +351,22 @@ RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so
 
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install -y curl
+    apt-get install -y curl sccache
 
 COPY --from=stage0 /opt/build /opt/build
 
 WORKDIR /sources/rustc
 COPY configs/rustc-config.toml /config.toml
-# TODO: patch rust toolchain to search `/toolchain` like the llvm patch
+# TODO: patch rust to search `/toolchain` like the llvm toolchain patch
+# HACK: Pay attention to the hardlink here. That prevents rust from panicing
+#       about a symlink when it builds its isolated sysroot
 RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/crt1.o  /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/Scrt1.o /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/rcrt1.o /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/crti.o  /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/crtn.o  /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/libc.a  /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/crt1.o  /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/Scrt1.o /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/rcrt1.o /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/crti.o  /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/crtn.o  /usr/lib/ \
+    && ln -v ${MUSL_SYSROOT}/usr/lib/libc.a  /usr/lib/ \
     && ln -sv ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
     ./configure \
@@ -323,30 +374,45 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
         --target=${MUSL_TRIPLE} \
-        --prefix=${MUSL_SYSROOT}/usr \
-        --llvm-cflags=${CFLAGS} \
-        --llvm-cxxflags=${CXXFLAGS} \
-        --llvm-ldflags=${CXXFLAGS} \
     && sed \
         -e "s|\${MUSL_TRIPLE}|${MUSL_TRIPLE}|g" \
         -e "s|\${MUSL_SYSROOT}|${MUSL_SYSROOT}|g" \
         /config.toml > config.toml \
     && make -j64 \
     && make install
-RUN rm -fv /etc/ld-musl-x86_64.path /lib/ld-musl-x86_64.so.1 /usr/lib/crt1.o /usr/lib/Scrt1.o /usr/lib/rcrt1.o /usr/lib/crti.o /usr/lib/crtn.o /usr/lib/libc.a
+# HACK: Cleanup all our hacked in files. Everything should be linked correctly
+#       against libunwind and `/toolchain` now. `libgcc_s` is no longer needed.
+RUN rm -fv \
+        ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
+        ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
+        ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so \
+        /lib/ld-musl-x86_64.so.1 \
+        /etc/ld-musl-x86_64.path \
+        /usr/lib/Scrt1.o \
+        /usr/lib/rcrt1.o \
+        /usr/lib/crt1.o \
+        /usr/lib/crti.o \
+        /usr/lib/crtn.o \
+        /usr/lib/libc.a
 
-#WORKDIR /sources/bash
-#COPY patches/bash /patches/bash
-#RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
-#    ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#        --without-bash-malloc \
-#    && make -j64 \
-#    && make install
-#RUN ln -sv bash /toolchain/bin/sh
+WORKDIR /sources/bash
+COPY patches/bash /patches/bash
+RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
+    ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --without-bash-malloc \
+    && make -j64 \
+    && make install
 
+# TODO setup cargo cache (and commit sccache build)
+RUN cargo install --path ${MUSL_SYSROOT}/usr coreutils findutils diffutils
+
+# Setup symlinks to ALL THE THINGS; keep bash at the end to preserve the diff
+RUN ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ln \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ls \
+    && ln -sv bash ${MUSL_SYSROOT}/bin/sh
 
 #WORKDIR /sources/m4
 #RUN ./configure
@@ -457,7 +523,7 @@ RUN ln -sv /sysroots/stage0 /compat/hack/toolchain
 # final
 ####
 FROM scratch
-ARG CCACHE_BUILD=ON
+ENV CCACHE_BUILD=OFF
 ENV CCACHE_DIR=/ccache
 ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
 ENV STAGE0_SYSROOT=/sysroots/stage0

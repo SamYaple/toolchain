@@ -47,6 +47,11 @@ set(_LLVM_TOOLCHAIN_TOOLS
   llvm-size
   llvm-strings
   llvm-strip
+
+  # needs to be built for rust, but this list also gets installed
+  # this is technically undesired TODO
+  FileCheck
+  llvm-mca
 )
 
 set(_LLVM_DISTRIBUTION_COMPONENTS
@@ -93,7 +98,7 @@ set(CLANG_BOOTSTRAP_TARGETS ${_CLANG_BOOTSTRAP_TARGETS} CACHE STRING "")
 # Minimize the set of tools and utilities created to a minimal set. This saves
 # space and cpu cycles, but is missing some of the cooler tools like bolt and
 # even lto currently.
-set(LLVM_TOOLCHAIN_TOOLS     "${_LLVM_TOOLCHAIN_TOOLS};FileCheck" CACHE STRING "")
+set(LLVM_TOOLCHAIN_TOOLS         ${_LLVM_TOOLCHAIN_TOOLS}         CACHE STRING "")
 set(LLVM_DISTRIBUTION_COMPONENTS ${_LLVM_DISTRIBUTION_COMPONENTS} CACHE STRING "")
 set(LLVM_ENABLE_PROJECTS         ${_LLVM_ENABLE_PROJECTS}         CACHE STRING "")
 set(LLVM_ENABLE_RUNTIMES         ${_LLVM_ENABLE_RUNTIMES}         CACHE STRING "")

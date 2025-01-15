@@ -3,13 +3,16 @@
 set -euxEo pipefail
 
 FILES=(
+    # no sig file; expected sha256 is 3a9080ac51d03615e7c1910a0a2a8df08424892b5f13b0628a204d3fcce0ea8b
+    https://distfiles.ariadne.space/pkgconf/pkgconf-2.3.0.tar.xz
+
+    # no sig file; expected sha256 is c740348f357396327a9795d3e8323bafd0fe8a5c7835fc1cbaba0cc8dfe7161f
     https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz
     https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz.sha256.txt
-    # no sig file; expected sha256 is c740348f357396327a9795d3e8323bafd0fe8a5c7835fc1cbaba0cc8dfe7161f
 
+    # no sig file; expected sha256 is 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
     https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
     https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz.sha256
-    # no sig file; expected sha256 is 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
 
     https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3.tar.gz
     https://github.com/Kitware/CMake/releases/download/v3.31.3/cmake-3.31.3-SHA-256.txt
@@ -23,6 +26,9 @@ FILES=(
 
     https://www.kernel.org/pub/software/scm/git/git-2.48.1.tar.xz
     https://www.kernel.org/pub/software/scm/git/git-2.48.1.tar.sign
+
+    https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz
+    https://github.com/openssl/openssl/releases/download/openssl-3.4.0/openssl-3.4.0.tar.gz.asc
 
     https://musl.libc.org/releases/musl-1.2.5.tar.gz
     https://musl.libc.org/releases/musl-1.2.5.tar.gz.asc
