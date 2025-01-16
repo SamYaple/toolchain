@@ -22,9 +22,7 @@ ENV GLIBC_SYSROOT=/sysroots/glibc
 ENV GLIBC_TRIPLE=x86_64-unknown-linux-gnu
 ENV MUSL_SYSROOT=/sysroots/musl
 ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
-ENV CCACHE_DIR=/ccache
-ARG CCACHE_BUILD=OFF
-ENV CCACHE_BUILD=${CCACHE_BUILD}
+ENV CARGO_HOME=/cargo
 
 # End BASE build
 #####
@@ -32,28 +30,14 @@ ENV CCACHE_BUILD=${CCACHE_BUILD}
 
 #####
 # BOOTSTRAP
-
-FROM base AS bootstrap
-
-# Install a base toolchain to build our bootstrap compiler from. We are using
-# `gcc` and `g++` for the C compiler and C++ compiler respectively. You could
-# swap out this with any other compiler that can build LLVM, at least in theory.
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y \
-        ccache \
-        cmake \
-        g++ \
-        gcc \
-        ninja-build \
-        patch \
-        python3
+FROM base AS stage0
 
 # Create a new sysroot with glibc installed
 WORKDIR ${GLIBC_SYSROOT}
-# extract a pre-built glibc and headers. this step should work from a non-debian
-# based system if you extract the deb files in the same way.
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get download libc6 libc6-dev linux-libc-dev
+# extract a pre-built glibc and headers. this step should work from a non-debian
+# based system if you extract the deb files in the same way.
 RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done \
     && mv lib/x86_64-linux-gnu/* usr/lib/x86_64-linux-gnu/ \
     && rm -rf lib* *.deb etc/ld.so.conf.d/* \
@@ -70,6 +54,21 @@ RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done \
     && ln -sv x86_64-linux-gnu/ld-linux-x86-64.so.2 lib/ld-linux-x86-64.so.2 \
     && cd lib/x86_64-linux-gnu \
     && find . -type l -exec sh -c 'ln -svf "$1".* "$1"' _ {} \;
+# We need these utilities to build LLVM. We don't have to use ninja, but we
+# aren't trying to hit issues with make builds and LLVM defaults to ninja
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install --no-install-recommends -y \
+        make \
+        cmake \
+        patch \
+        python3 \
+        ninja-build
+
+# Install a base toolchain to build our bootstrap compiler from. We are using
+# `gcc` and `g++` for the C compiler and C++ compiler respectively. You could
+# swap out this with any other compiler that can build LLVM, at least in theory.
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install --no-install-recommends -y gcc g++
 
 # Build LLVM
 #
@@ -78,18 +77,10 @@ RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done \
 # Only the tools needed to bootstrap the musl toolchain are kept.
 #
 # The cmake files are also commented for additional reading.
-#
-# NOTE: fix-cmake-no-sanitizers-build.patch is a hotfix to allow a no-sanitizers
-#       build to work. This was not a problem in llvm 18.x but I haven't looked
-#       at the issue beyond making this quick patch.
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake configs/glibc-base.cmake configs/glibc-stage1.cmake configs/glibc-stage2.cmake /
-COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-bootstrap \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && cmake -S llvm -B build -G Ninja \
-        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
-        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
         -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
         -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
         -C /glibc-stage1.cmake \
@@ -100,51 +91,17 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-bootstrap \
     && cmake --build build --target stage2-distribution \
     && cmake --build build --target stage2-install-distribution
 
-# I could use the cmake build to setup these symlinks, but for now I am doing it
-# directly. This will allow most of the remaining builds to detect which tools
-# to use.
-WORKDIR ${GLIBC_SYSROOT}
-RUN ln -sv clang           bin/cc \
-    && ln -sv clang++      bin/c++ \
-    && ln -sv lld          bin/ld \
-    && ln -sv llvm-ar      bin/ar \
-    && ln -sv llvm-nm      bin/nm \
-    && ln -sv llvm-objcopy bin/objcopy \
-    && ln -sv llvm-objdump bin/objdump \
-    && ln -sv llvm-ranlib  bin/ranlib \
-    && ln -sv llvm-size    bin/size \
-    && ln -sv llvm-strings bin/strings \
-    && ln -sv llvm-strip   bin/strip
+# Remove the host compiler
+RUN apt-get autoremove --purge -y gcc g++
 
-# End BOOTSTRAP build
-#####
-
-
-#####
-# STAGE0
-
-FROM base AS stage0
-
-# We reuse the `base` image here, so we have no tools. gnumake and a
-# functioning compiler is needed. We copy in our stage0 compiler and install
-# make from a packaged source.
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y \
-        cmake \
-        ccache \
-        ninja-build \
-        python3 \
-        patch \
-        make
-
-COPY --from=bootstrap ${GLIBC_SYSROOT} ${GLIBC_SYSROOT}
+# Add the newly built sysroot to our PATH, no compiler or tools remain otherwise
 ENV PATH="${GLIBC_SYSROOT}/usr/bin:${PATH}"
 
+# Setup base filesystem structure
 WORKDIR ${MUSL_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv usr/lib lib \
     && ln -sv usr/bin bin \
-    && ln -sv lib usr/lib64 \
     && ln -sv . toolchain \
     && ln -sv ${MUSL_SYSROOT} /toolchain
 
@@ -159,7 +116,7 @@ RUN make HOSTCFLAGS="--sysroot=${GLIBC_SYSROOT}" HOSTLDFLAGS="--sysroot=${GLIBC_
 # `/toolchain/etc/ld-musl-x86_64.path` look into `/toolchain/usr` vs `/usr`.
 # This further isolates our new toolchain from any host files.
 WORKDIR /sources/musl
-RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="${MUSL_SYSROOT}/usr" \
+RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib --prefix="${MUSL_SYSROOT}/usr" \
     && make -j64 \
     && make install
 RUN echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
@@ -170,12 +127,9 @@ RUN echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage1.cmake configs/musl-stage2.cmake /
 COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-stage0 \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
     && cmake -S llvm -B /opt/build -G Ninja \
-        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
-        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
         -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
         -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
         -D MUSL_SYSROOT=${MUSL_SYSROOT} \
@@ -200,16 +154,19 @@ RUN ln -sv clang           bin/cc \
     && ln -sv llvm-objcopy bin/objcopy \
     && ln -sv llvm-objdump bin/objdump \
     && ln -sv llvm-ranlib  bin/ranlib \
+    && ln -sv llvm-readelf bin/readelf \
     && ln -sv llvm-size    bin/size \
     && ln -sv llvm-strings bin/strings \
     && ln -sv llvm-strip   bin/strip
 
-# only needed because im applying patches to some of these source trees
-WORKDIR /sources/patch
+RUN rm -rf ${GLIBC_SYSROOT}
 ENV PATH="${MUSL_SYSROOT}/usr/bin:${PATH}"
 ENV CFLAGS="--sysroot=${MUSL_SYSROOT}"
 ENV CXXFLAGS="--sysroot=${MUSL_SYSROOT}"
 ENV LDFLAGS="--sysroot=${MUSL_SYSROOT}"
+
+# only needed because im applying a patch before building `patch` after this
+WORKDIR /sources/patch
 RUN ./configure \
         --prefix=${MUSL_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
@@ -222,7 +179,9 @@ RUN ./configure \
 
 #### 
 # TOOLCHAIN
-
+#
+# No additional host packages are used, but some host tooling is still used for
+# the configuration step of building packages.
 FROM base AS toolchain
 COPY --from=stage0 ${MUSL_SYSROOT} ${MUSL_SYSROOT}
 RUN ln -sv ${MUSL_SYSROOT} /toolchain
@@ -253,7 +212,7 @@ RUN rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
 
 # perl wants system bzip2
 WORKDIR /sources/bzip2
-RUN sed -i -e 's@CC=gcc@CC=cc@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefile* \
+RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefile* \
     && make -f Makefile-libbz2_so \
     && make clean \
     && make -j64 \
@@ -310,29 +269,12 @@ RUN ./configure --prefix=${MUSL_SYSROOT}/usr --disable-static \
     && make install
 RUN ln -sv pkgconf ${MUSL_SYSROOT}/usr/bin/pkg-config
 
-#WORKDIR /sources/cmake
-#RUN ./bootstrap --parallel=64 -- \
-#        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-#        -D CMAKE_USE_OPENSSL=OFF \
-#    && make -j64 \
-#    && make install
-#
-#WORKDIR /sources/ninja
-#RUN ./configure.py --bootstrap \
-#    && ./ninja all \
-#    && install -m 0755 ./ninja ${MUSL_SYSROOT}/usr/bin/ninja
-#
-#WORKDIR /sources/ccache/build
-## TODO: I need to find a better way to provide these deps to ccahe during build
-#COPY ccachedeps /ccachedeps
-#RUN ln -s /ccachedeps/_deps _deps \
-#    && cmake \
-#        -D CMAKE_BUILD_TYPE=Release \
-#        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-#        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
-#    && make -j64 \
-#    && make install
+# TODO: cache these deps so rust bootstrap doesnt need curl
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install -y curl
 
+# the stage0 compiler downloaded is linked against `libgcc_s` which we do not
+# have. We can build a compat layer manually. We removed this after building
 WORKDIR /sources/llvm-project/llvm-libgcc
 RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && clang \
@@ -350,36 +292,38 @@ RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && ln -sv libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
     && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so
 
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install -y curl sccache
+# HACK: downloaded stage0 is linked against the /lib instead of /toolchain/lib
+RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
+    && ln -sv ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
 
+# FIXME: copy over LLVM build source for rust to reference
 COPY --from=stage0 /opt/build /opt/build
 
 WORKDIR /sources/rustc
-COPY configs/rustc-config.toml /config.toml
-# TODO: patch rust to search `/toolchain` like the llvm toolchain patch
-# HACK: Pay attention to the hardlink here. That prevents rust from panicing
-#       about a symlink when it builds its isolated sysroot
-RUN cp -av ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/crt1.o  /usr/lib/ \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/Scrt1.o /usr/lib/ \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/rcrt1.o /usr/lib/ \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/crti.o  /usr/lib/ \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/crtn.o  /usr/lib/ \
-    && ln -v ${MUSL_SYSROOT}/usr/lib/libc.a  /usr/lib/ \
-    && ln -sv ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+COPY patches/rust /patches/rust
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
-    ./configure \
-        --bootstrap-cache-path=/rustbootstrapdeps \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-        --target=${MUSL_TRIPLE} \
-    && sed \
-        -e "s|\${MUSL_TRIPLE}|${MUSL_TRIPLE}|g" \
-        -e "s|\${MUSL_SYSROOT}|${MUSL_SYSROOT}|g" \
-        /config.toml > config.toml \
+    patch -p1 < /patches/rust/remove-dead-musl-static-code.patch \
+    && patch -p1 < /patches/rust/musl-target-dynamic.patch \
+    && ./configure \
+        --tools=src,cargo,clippy,rustfmt \
+        --set=build.bootstrap-cache-path=/rustbootstrapdeps \
+        --set=build.jobs=64 \
+        --set=build.docs=false \
+        --set=build.host=${MUSL_TRIPLE} \
+        --set=build.build=${MUSL_TRIPLE} \
+        --set=build.target=${MUSL_TRIPLE} \
+        --set=install.prefix=${MUSL_SYSROOT}/usr \
+        --set=install.sysconfdir=etc \
+        --set=llvm.download-ci-llvm=false \
+        --set=llvm.use-libcxx=true \
+        --set=rust.llvm-libunwind=system \
+        --set=rust.lto=off \
+        --set=rust.musl-root=${MUSL_SYSROOT}/usr \
+        --set=target.${MUSL_TRIPLE}.crt-static=false \
+        --set=target.${MUSL_TRIPLE}.llvm-config=/opt/build/tools/clang/stage2-bins/bin/llvm-config \
     && make -j64 \
     && make install
+
 # HACK: Cleanup all our hacked in files. Everything should be linked correctly
 #       against libunwind and `/toolchain` now. `libgcc_s` is no longer needed.
 RUN rm -fv \
@@ -387,13 +331,49 @@ RUN rm -fv \
         ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
         ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so \
         /lib/ld-musl-x86_64.so.1 \
-        /etc/ld-musl-x86_64.path \
-        /usr/lib/Scrt1.o \
-        /usr/lib/rcrt1.o \
-        /usr/lib/crt1.o \
-        /usr/lib/crti.o \
-        /usr/lib/crtn.o \
-        /usr/lib/libc.a
+        /etc/ld-musl-x86_64.path
+#        /usr/lib/Scrt1.o \
+#        /usr/lib/rcrt1.o \
+#        /usr/lib/crt1.o \
+#        /usr/lib/crti.o \
+#        /usr/lib/crtn.o \
+#        /usr/lib/libc.a
+
+# Build rust again with the patched musl-dynamic target
+# HACK this is a nasty thing that needs to be called out. It changes the default
+# musl target to be dynamically linked. Traditionally the rust target named
+# `x86_64-unknown-linux-musl` would be statically linked, but we want dylib
+# stuff. I could do a custom target, but then the names won't match for other
+# tools. Given how this distro is being built up, this is a compromise for
+# internal consistency vs consistency in the rust ecosystem.
+WORKDIR /sources/rustc
+COPY patches/rust /patches/rust
+RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
+    patch -p1 < /patches/rust/remove-dead-musl-static-code.patch \
+    && patch -p1 < /patches/rust/musl-target-dynamic.patch \
+    && ./configure \
+        --tools=src,cargo,clippy,rustfmt \
+        --set=build.bootstrap-cache-path=/rustbootstrapdeps \
+        --set=build.jobs=64 \
+        --set=build.docs=false \
+        --set=build.cargo=${MUSL_SYSROOT}/usr/bin/cargo \
+        --set=build.cargo-clippy=${MUSL_SYSROOT}/usr/bin/cargo-clippy \
+        --set=build.rustc=${MUSL_SYSROOT}/usr/bin/rustc \
+        --set=build.rustfmt=${MUSL_SYSROOT}/usr/bin/rustfmt \
+        --set=build.host=${MUSL_TRIPLE} \
+        --set=build.build=${MUSL_TRIPLE} \
+        --set=build.target=${MUSL_TRIPLE} \
+        --set=install.prefix=${MUSL_SYSROOT}/usr \
+        --set=install.sysconfdir=etc \
+        --set=llvm.download-ci-llvm=false \
+        --set=llvm.use-libcxx=true \
+        --set=rust.llvm-libunwind=system \
+        --set=rust.lto=off \
+        --set=rust.download-rustc=false \
+        --set=rust.musl-root=${MUSL_SYSROOT}/usr \
+        --set=target.${MUSL_TRIPLE}.llvm-config=/opt/build/tools/clang/stage2-bins/bin/llvm-config \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/bash
 COPY patches/bash /patches/bash
@@ -405,110 +385,17 @@ RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
         --without-bash-malloc \
     && make -j64 \
     && make install
+RUN ln -sv bash ${MUSL_SYSROOT}/usr/bin/sh
 
+ENV RUSTFLAGS="--sysroot=${MUSL_SYSROOT}"
 # TODO setup cargo cache (and commit sccache build)
-RUN cargo install --path ${MUSL_SYSROOT}/usr coreutils findutils diffutils
-
-# Setup symlinks to ALL THE THINGS; keep bash at the end to preserve the diff
-RUN ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ln \
-    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ls \
-    && ln -sv bash ${MUSL_SYSROOT}/bin/sh
-
-#WORKDIR /sources/m4
-#RUN ./configure
-#        --prefix=/toolchain/usr
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/gawk
-## TODO: convert this to a patch
-#RUN sed -ie 's|extras||' Makefile.in \
-#    && ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#        --disable-extensions \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/grep
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/gzip
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/patch
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/sed
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
-##       building as root currently
-#WORKDIR /sources/coreutils
-#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/findutils
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --build=${MUSL_TRIPLE} \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-## TODO: remove FORCE_UNSAFE_CONFIGURE=1. this is in place because we are
-##       building as root currently
-#WORKDIR /sources/tar
-#RUN FORCE_UNSAFE_CONFIGURE=1 ./configure \
-#        --prefix=/toolchain/usr \
-#        --host=${MUSL_TRIPLE} \
-#    && make -j64 \
-#    && make install
-
-#WORKDIR /sources/xz
-#RUN ./configure \
-#        --prefix=/toolchain/usr \
-#        --host=${MUSL_TRIPLE} \
-#        --disable-static \
-#    && make -j64 \
-#    && make install
-#RUN rm /toolchain/usr/lib/liblzma.la
-
-#WORKDIR /sources/ccache/build
-## TODO: I need to find a better way to provide these deps to ccahe during build
-#COPY ccachedeps /ccachedeps
-#RUN ln -s /ccachedeps/_deps _deps \
-#    && cmake \
-#        -D CMAKE_BUILD_TYPE=Release \
-#        -D CMAKE_INSTALL_PREFIX=/toolchain/usr \
-#        -D DOCTEST_INCLUDE_DIR=/ccachedeps/_deps .. \
-#    && make -j64 \
-#    && make install
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    cargo install --root ${MUSL_SYSROOT}/usr --features unix \
+        coreutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    cargo install --root ${MUSL_SYSROOT}/usr \
+        diffutils \
+        findutils
 
 ####
 # OCI/docker/podman need /bin/sh available, but only /toolchain will exist in
@@ -516,23 +403,26 @@ RUN ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ln \
 ####
 FROM base AS oci-compat
 RUN mkdir -p /compat/hack /compat/bin
-RUN ln -sv /sysroots/stage0/usr/bin/sh /compat/bin/sh
-RUN ln -sv /sysroots/stage0 /compat/hack/toolchain
+RUN ln -sv /sysroots/musl/usr/bin/sh /compat/bin/sh
+RUN ln -sv /sysroots/musl /compat/hack/toolchain
 
 ####
 # final
 ####
 FROM scratch
-ENV CCACHE_BUILD=OFF
-ENV CCACHE_DIR=/ccache
 ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
-ENV STAGE0_SYSROOT=/sysroots/stage0
+ENV STAGE0_SYSROOT=/sysroots/musl
 ENV STAGE1_SYSROOT=/sysroots/stage1
 
 COPY --from=toolchain /sysroots/musl ${STAGE0_SYSROOT}
 COPY --from=oci-compat /compat/bin /bin
 COPY --from=oci-compat /compat/hack/ /
 ENV PATH="${STAGE0_SYSROOT}/usr/bin"
+
+# Setup symlinks to ALL THE THINGS
+RUN coreutils ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ln \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ls \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mkdir
 
 RUN mkdir /tmp
 
@@ -562,12 +452,8 @@ RUN echo "${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${STAGE1_SYSROOT}/etc/ld-m
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
 COPY configs/common.cmake /
-COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-toolchain \
-    patch -p1 < /patches/llvm-project/fix-cmake-no-sanitizers-build.patch \
+RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && cmake -S llvm -B build -G Ninja \
-        -D LLVM_CCACHE_BUILD=${CCACHE_BUILD} \
-        -D LLVM_CCACHE_DIR=${CCACHE_DIR} \
         -D CMAKE_SYSROOT=${STAGE1_SYSROOT} \
         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
         -D LLVM_HOST_TRIPLE=${MUSL_TRIPLE} \

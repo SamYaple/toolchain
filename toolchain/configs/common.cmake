@@ -44,6 +44,7 @@ set(_LLVM_TOOLCHAIN_TOOLS
   llvm-objcopy
   llvm-objdump
   llvm-ranlib
+  llvm-readelf
   llvm-size
   llvm-strings
   llvm-strip
