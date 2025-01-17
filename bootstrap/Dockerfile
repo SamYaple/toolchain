@@ -10,8 +10,6 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     rm /etc/apt/apt.conf.d/docker-clean \
     && apt-get update
 
-# Setup some common variables used throughout the build process, but not in the
-# final produced image. No trickery going on here, just some helper vars.
 ENV GLIBC_SYSROOT=/sysroots/glibc
 ENV GLIBC_TRIPLE=x86_64-unknown-linux-gnu
 
@@ -40,19 +38,11 @@ RUN for deb in *.deb; do dpkg-deb -x ${deb} .; done \
     && cd lib/x86_64-linux-gnu \
     && find . -type l -exec sh -c 'ln -svf "$1".* "$1"' _ {} \;
 
-# We need these utilities to build LLVM. We don't have to use ninja, but we
-# aren't trying to hit issues with make builds and LLVM defaults to ninja
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y \
-        cmake \
-        python3 \
-        ninja-build
-
 # Install a base toolchain to build our bootstrap compiler from. We are using
 # `gcc` and `g++` for the C compiler and C++ compiler respectively. You could
 # swap out this with any other compiler that can build LLVM, at least in theory.
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y gcc g++
+    apt-get install --no-install-recommends -y gcc g++ cmake python3 ninja-build
 
 # Build LLVM, Clang, libc++, compiler-rt
 #
@@ -62,15 +52,18 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 #
 # The cmake files are also commented for additional reading.
 WORKDIR /sources/llvm-project
-COPY common.cmake glibc-base.cmake glibc-stage1.cmake /
+COPY glibc-llvm.cmake glibc-stage1-only.cmake /
 RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && cmake -S llvm -B build -G Ninja \
         -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
         -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
-        -C /glibc-stage1.cmake \
-        -C /glibc-base.cmake \
-        -C /common.cmake \
+        -C /glibc-stage1-only.cmake \
+        -C /glibc-llvm.cmake \
     && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes \
     && cmake --build build --target stage2-distribution \
     && cmake --build build --target stage2-install-distribution
+
+# We don't do anything else in this image, but we can cleanup the build tools
+# for completeness. None of these tools are needed to use the compiled toolchain
+RUN apt-get autoremove --purge -y gcc g++ cmake python3 ninja-build
