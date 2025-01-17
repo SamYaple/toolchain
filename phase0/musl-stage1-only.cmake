@@ -21,9 +21,7 @@ set(BUILTINS_${MUSL_TRIPLE}_CMAKE_SYSROOT ${MUSL_SYSROOT} CACHE STRING "")
 # llvm again using the newly installed runtimes, and the compiler from `stage1`
 set(CLANG_ENABLE_BOOTSTRAP ON CACHE BOOL "")
 set(CLANG_BOOTSTRAP_CMAKE_ARGS
-    -D MUSL_SYSROOT=${MUSL_SYSROOT}
     -D MUSL_TRIPLE=${MUSL_TRIPLE}
-    -C /musl-stage2.cmake
-    -C /musl-base.cmake
-    -C /common.cmake
+    -D CMAKE_SYSROOT=${MUSL_SYSROOT}
+    -C /musl-llvm.cmake
     CACHE STRING "")

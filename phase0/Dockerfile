@@ -60,7 +60,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y cmake python3 ninja-build patch
 
 WORKDIR /sources/llvm-project
-COPY configs/common.cmake configs/musl-base.cmake configs/musl-stage1.cmake configs/musl-stage2.cmake /
+COPY musl-llvm.cmake musl-stage1-only.cmake /
 COPY patches/llvm-project /patches/llvm-project
 RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
@@ -69,9 +69,8 @@ RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compile
         -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
         -D MUSL_SYSROOT=${MUSL_SYSROOT} \
         -D MUSL_TRIPLE=${MUSL_TRIPLE} \
-        -C /musl-stage1.cmake \
-        -C /musl-base.cmake \
-        -C /common.cmake \
+        -C /musl-stage1-only.cmake \
+        -C /musl-llvm.cmake \
     && cmake --build /opt/llvm-build --target runtimes \
     && cmake --build /opt/llvm-build --target install-runtimes \
     && cmake --build /opt/llvm-build --target stage2-distribution \
@@ -232,8 +231,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 WORKDIR /sources/rustc
 COPY patches/rust /patches/rust
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
-    patch -p1 < /patches/rust/remove-dead-musl-static-code.patch \
-    && patch -p1 < /patches/rust/musl-target-dynamic.patch \
+    patch -p1 < /patches/rust/dynamic-musl-target.patch \
     && ./configure \
         --tools=cargo,clippy,rustfmt \
         --set=build.bootstrap-cache-path=/rustbootstrapdeps \
@@ -242,7 +240,7 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
         --set=build.host=${MUSL_TRIPLE} \
         --set=build.build=${MUSL_TRIPLE} \
         --set=build.target=${MUSL_TRIPLE} \
-        --set=install.prefix=${RUSTBOOTSTRAP}/usr \
+        --set=install.prefix=${RUSTBOOTSTRAP} \
         --set=install.sysconfdir=etc \
         --set=llvm.use-libcxx=true \
         --set=rust.llvm-libunwind=system \
@@ -250,8 +248,8 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
         --set=rust.musl-root=${MUSL_SYSROOT}/usr \
         --set=target.${MUSL_TRIPLE}.crt-static=false \
         --set=target.${MUSL_TRIPLE}.llvm-config=/opt/llvm-build/tools/clang/stage2-bins/bin/llvm-config \
-    && make -j64 \
-    && make install
+    && ./x.py build -j64 \
+    && ./x.py install
 
 # HACK: Cleanup all our hacked in files. Everything should be linked correctly
 #       against libunwind and `/toolchain` now. `libgcc_s` and `curl` are no
@@ -281,15 +279,14 @@ RUN rm -v ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
 # Build rust again with the patched musl-dynamic target
 WORKDIR /sources/rustc
 COPY patches/rust /patches/rust
-RUN patch -p1 < /patches/rust/remove-dead-musl-static-code.patch \
-    && patch -p1 < /patches/rust/musl-target-dynamic.patch \
+RUN patch -p1 < /patches/rust/dynamic-musl-target.patch \
     && ./configure \
         --set=build.jobs=64 \
         --set=build.docs=false \
-        --set=build.cargo=${RUSTBOOTSTRAP}/usr/bin/cargo \
-        --set=build.cargo-clippy=${RUSTBOOTSTRAP}/usr/bin/cargo-clippy \
-        --set=build.rustc=${RUSTBOOTSTRAP}/usr/bin/rustc \
-        --set=build.rustfmt=${RUSTBOOTSTRAP}/usr/bin/rustfmt \
+        --set=build.cargo=${RUSTBOOTSTRAP}/bin/cargo \
+        --set=build.cargo-clippy=${RUSTBOOTSTRAP}/bin/cargo-clippy \
+        --set=build.rustc=${RUSTBOOTSTRAP}/bin/rustc \
+        --set=build.rustfmt=${RUSTBOOTSTRAP}/bin/rustfmt \
         --set=build.host=${MUSL_TRIPLE} \
         --set=build.build=${MUSL_TRIPLE} \
         --set=build.target=${MUSL_TRIPLE} \
@@ -299,8 +296,8 @@ RUN patch -p1 < /patches/rust/remove-dead-musl-static-code.patch \
         --set=rust.llvm-libunwind=system \
         --set=rust.lto=off \
         --set=target.${MUSL_TRIPLE}.llvm-config=/opt/llvm-build/tools/clang/stage2-bins/bin/llvm-config \
-    && make -j64 \
-    && make install
+    && ./x.py build -j64 \
+    && ./x.py install
 
 RUN rm -rfv ${RUST_BOOTSTRAP}
 
