@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG FROM=docker.io/library/debian:bookworm-slim
 
-FROM ${FROM}
+FROM ${FROM} AS phase0
 COPY debian.sources /etc/apt/sources.list.d/
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     rm /etc/apt/apt.conf.d/docker-clean \
@@ -314,7 +314,54 @@ RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
     && make install
 RUN ln -sv bash ${MUSL_SYSROOT}/usr/bin/sh
 
+WORKDIR /sources/sed
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/grep
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
 # FIXME: we steal debians cacerts from /etc/ssl
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install -y ca-certificates
 RUN cp -av /etc/ssl /sysroots/musl/etc/ssl
+
+WORKDIR /git_sources/coreutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./ --features unix
+
+WORKDIR /git_sources/findutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./
+
+WORKDIR /git_sources/diffutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./
+
+WORKDIR /sources/cmake
+RUN ./bootstrap --parallel=64 -- \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/gawk
+RUN sed -ie 's|extras||' Makefile.in \
+    && ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --disable-extensions \
+    && make -j64 \
+    && make install
+
+FROM scratch
+COPY --from=phase0 /sysroots/musl /sysroots/musl

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG FROM=localhost/toolchain:latest
+ARG FROM=localhost/phase0:latest
 
 ####
 # When building with Docker/Podman the `RUN` statements are executed with
@@ -51,26 +51,40 @@ ENV CARGO_HOME=/cargo
 ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
 ENV STAGE0_SYSROOT=/sysroots/musl
 ENV STAGE1_SYSROOT=/sysroots/stage1
-ENV PATH="${STAGE0_SYSROOT}/usr/bin"
+ENV PATH="${STAGE1_SYSROOT}/usr/bin:${STAGE0_SYSROOT}/usr/bin"
+
+ENV    CFLAGS="--sysroot=${STAGE0_SYSROOT}"
+ENV  CXXFLAGS="--sysroot=${STAGE0_SYSROOT}"
+ENV   LDFLAGS="--sysroot=${STAGE0_SYSROOT}"
 ENV RUSTFLAGS="--sysroot=${STAGE0_SYSROOT}"
-
-WORKDIR /git_sources/coreutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    cargo install --root ${STAGE0_SYSROOT}/usr --path ./ --features unix
-
-WORKDIR /git_sources/findutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    cargo install --root ${STAGE0_SYSROOT}/usr --path ./
-
-#WORKDIR /git_sources/diffutils
-#RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-#    cargo install --root ${STAGE0_SYSROOT}/usr --path ./
 
 # Setup symlinks to ALL THE THINGS
 RUN coreutils ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ln \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mkdir \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/basename \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cat \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/chmod \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cp \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cut \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/date \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/dirname \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/expr \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/head \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uname
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ls \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mkdir \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mv \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/pwd \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rm \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rmdir \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sleep \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sort\
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tee \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/test \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/touch \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tr \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/true \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uname \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/wc \
+    && ln -sv diffutils ${STAGE0_SYSROOT}/usr/bin/cmp
 
 WORKDIR ${STAGE1_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
@@ -78,9 +92,6 @@ RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv usr/bin bin \
     && ln -sv lib usr/lib64 \
     && ln -sv . toolchain
-
-# need sed installed....
-RUN sed
 
 # Install linux headers (needed for musl libc)
 WORKDIR /sources/linux
@@ -101,28 +112,76 @@ RUN echo "${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${STAGE1_SYSROOT}/etc/ld-m
 
 # Install compiler-rt, libc++, libc++abi, and libunwind
 WORKDIR /sources/llvm-project
-COPY configs/common.cmake /
+COPY musl-llvm.cmake /
 RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
-    && cmake -S llvm -B build -G Ninja \
-        -D CMAKE_SYSROOT=${STAGE1_SYSROOT} \
-        -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
-        -D LLVM_HOST_TRIPLE=${MUSL_TRIPLE} \
-        -D LLVM_BUILTIN_TARGETS=${MUSL_TRIPLE} \
-        -D LLVM_RUNTIME_TARGETS=${MUSL_TRIPLE} \
-        -D RUNTIMES_${MUSL_TRIPLE}_LIBCXX_HAS_MUSL_LIBC=ON \
-        -C /common.cmake \
-    && cmake --build build --target runtimes \
+    && cmake -S llvm -B build -G "Unix Makefiles" \
+        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
+	-D MUSL_SYSROOT=${STAGE1_SYSROOT} \
+        -C /musl-llvm.cmake \
+    && cmake --build build --target runtimes --parallel 64 \
     && cmake --build build --target install-runtimes
 
-# NOT UNTIL zlib and bzip2
-RUN false
+ENV    CFLAGS="--sysroot=${STAGE1_SYSROOT}"
+ENV  CXXFLAGS="--sysroot=${STAGE1_SYSROOT}"
+ENV   LDFLAGS="--sysroot=${STAGE1_SYSROOT}"
+ENV RUSTFLAGS="--sysroot=${STAGE1_SYSROOT}"
 
-# We can now update our /toolchain symlink to link against stage1 libs. All of
-# the binaries still live in stage0 for now.
-RUN ln -svnf ${STAGE1_SYSROOT} /toolchain
+# perl wants system zlib
+# openssl wants system zlib
+WORKDIR /sources/zlib
+RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
+    && ./configure --prefix=${STAGE1_SYSROOT}/usr \
+    && make -j64 \
+    && make install \
+    && rm -v ${STAGE1_SYSROOT}/lib/libz.a
 
-# TODO: Add all needed libs before the tools that need them
-# make/cmake/ninja and other binaries need to be built last-ish
+# perl wants system bzip2
+WORKDIR /sources/bzip2
+RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefile* \
+    && make -f Makefile-libbz2_so \
+    && make clean \
+    && make -j64 \
+    && make PREFIX=${STAGE1_SYSROOT}/usr install \
+    && cp -av bzip2-shared ${STAGE1_SYSROOT}/usr/bin/bzip2 \
+    && ln -sfv bzip2       ${STAGE1_SYSROOT}/usr/bin/bzcat \
+    && ln -sfv bzip2       ${STAGE1_SYSROOT}/usr/bin/bunzip2 \
+    && cp -av libbz2.so.1.0.8 ${STAGE1_SYSROOT}/usr/lib/libbz2.so.1.0.8 \
+    && ln -sv libbz2.so.1.0.8 ${STAGE1_SYSROOT}/usr/lib/libbz2.so.1.0 \
+    && ln -sv libbz2.so.1.0   ${STAGE1_SYSROOT}/usr/lib/libbz2.so.1 \
+    && ln -sv libbz2.so.1     ${STAGE1_SYSROOT}/usr/lib/libbz2.so \
+    && rm -v ${STAGE1_SYSROOT}/lib/libbz2.a
+
+
+# openssl needs perl
+WORKDIR /sources/perl
+RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
+    && sh Configure -des \
+        -D libc=${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libc.so \
+        -D prefix=/toolchain/usr \
+        -D vendorprefix=/toolchain/usr \
+        -D privlib=/toolchain/usr/lib/perl5/5.40/core_perl \
+        -D archlib=/toolchain/usr/lib/perl5/5.40/core_perl \
+        -D sitelib=/toolchain/usr/lib/perl5/5.40/site_perl \
+        -D sitearch=/toolchain/usr/lib/perl5/5.40/site_perl \
+        -D vendorlib=/toolchain/usr/lib/perl5/5.40/vendor_perl \
+        -D vendorarch=/toolchain/usr/lib/perl5/5.40/vendor_perl \
+        -D pager="/toolchain/usr/bin/less -isR" \
+        -D useshrplib \
+        -D usethreads \
+    && make -j64 \
+    && make install
+
+# cargo needs openssl-sys
+# cmake wants openssl
+WORKDIR /sources/openssl
+RUN CC=cc CXX=cxx ./config \
+        --prefix=${STAGE1_SYSROOT}/usr \
+        --openssldir=${STAGE1_SYSROOT}/etc/ssl \
+        --libdir=lib \
+        shared \
+        zlib-dynamic \
+    && make -j64 \
+    && make install_sw
 
 WORKDIR /sources/make
 RUN ./configure \
@@ -136,7 +195,6 @@ WORKDIR /sources/cmake
 RUN cmake \
         -B build \
         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
-        -D CMAKE_USE_OPENSSL=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
 
@@ -157,3 +215,6 @@ RUN cmake \
         -D BUILD_TESTING=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
+
+RUN ln -svnf ${STAGE1_SYSROOT} /toolchain
+RUN rm -rf ${STAGE0_SYSROOT}
