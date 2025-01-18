@@ -41,7 +41,7 @@ RUN mkdir -p /compat/hack /compat/bin /compat/etc /compat/tmp \
 # and we have `cargo`, but no other tools.
 #
 # Where do we go now?
-FROM ${FROM}
+FROM ${FROM} AS phase1
 COPY --from=oci-compat /compat/etc /etc
 COPY --from=oci-compat /compat/tmp /tmp
 COPY --from=oci-compat /compat/bin /bin
@@ -63,10 +63,13 @@ RUN coreutils ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ln \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/basename \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cat \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/chmod \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/comm \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cp \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cut \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/date \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/dirname \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/echo \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/env \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/expr \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/head \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ls \
@@ -76,13 +79,15 @@ RUN coreutils ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ln \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rm \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rmdir \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sleep \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sort\
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sort \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/split \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tee \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/test \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/touch \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tr \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/true \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uname \
+    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uniq \
     && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/wc \
     && ln -sv diffutils ${STAGE0_SYSROOT}/usr/bin/cmp
 
@@ -116,7 +121,7 @@ COPY musl-llvm.cmake /
 RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
     && cmake -S llvm -B build -G "Unix Makefiles" \
         -D MUSL_TRIPLE=${MUSL_TRIPLE} \
-	-D MUSL_SYSROOT=${STAGE1_SYSROOT} \
+        -D MUSL_SYSROOT=${STAGE1_SYSROOT} \
         -C /musl-llvm.cmake \
     && cmake --build build --target runtimes --parallel 64 \
     && cmake --build build --target install-runtimes
@@ -129,7 +134,7 @@ ENV RUSTFLAGS="--sysroot=${STAGE1_SYSROOT}"
 # perl wants system zlib
 # openssl wants system zlib
 WORKDIR /sources/zlib
-RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
+RUN sed -i -e 's|^if test \$shared -eq 1; then$|if test \$shared -eq 0; then|' configure \
     && ./configure --prefix=${STAGE1_SYSROOT}/usr \
     && make -j64 \
     && make install \
@@ -151,30 +156,47 @@ RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefi
     && ln -sv libbz2.so.1     ${STAGE1_SYSROOT}/usr/lib/libbz2.so \
     && rm -v ${STAGE1_SYSROOT}/lib/libbz2.a
 
-
 # openssl needs perl
 WORKDIR /sources/perl
 RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
     && sh Configure -des \
-        -D libc=${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libc.so \
-        -D prefix=/toolchain/usr \
-        -D vendorprefix=/toolchain/usr \
-        -D privlib=/toolchain/usr/lib/perl5/5.40/core_perl \
-        -D archlib=/toolchain/usr/lib/perl5/5.40/core_perl \
-        -D sitelib=/toolchain/usr/lib/perl5/5.40/site_perl \
-        -D sitearch=/toolchain/usr/lib/perl5/5.40/site_perl \
-        -D vendorlib=/toolchain/usr/lib/perl5/5.40/vendor_perl \
-        -D vendorarch=/toolchain/usr/lib/perl5/5.40/vendor_perl \
+        -D libc=__REPLACE_LIBDIR__/${MUSL_TRIPLE}/libc.so \
+        -D prefix=__REPLACE_PREFIX__ \
+        -D vendorprefix=__REPLACE_PREFIX__ \
+        -D bin=__REPLACE_PREFIX__/bin \
+        -D vendorbin=__REPLACE_PREFIX__/bin \
+        -D vendorscript=__REPLACE_PREFIX__/bin \
+        -D privlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+        -D archlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+        -D sitelib=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+        -D sitearch=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+        -D vendorlib=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
+        -D vendorarch=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
         -D pager="/toolchain/usr/bin/less -isR" \
+        -D userelocatableinc \
         -D useshrplib \
         -D usethreads \
+    && sed -i \
+           -e 's|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
+           -e 's|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
+           Makefile \
+    && sed -i \
+           -e '/^[^=]*install[^=]*=/ s|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
+           -e '/^[^=]*install[^=]*=/ s|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
+           Policy.sh \
+           config.sh \
+    && sed -i \
+           -e 's|__REPLACE_PREFIX__|.../..|g' \
+           -e 's|__REPLACE_LIBDIR__|.../../lib|g' \
+           config.sh \
+           Policy.sh \
     && make -j64 \
     && make install
 
 # cargo needs openssl-sys
 # cmake wants openssl
 WORKDIR /sources/openssl
-RUN CC=cc CXX=cxx ./config \
+RUN CC=cc CXX=cxx ${STAGE1_SYSROOT}/usr/bin/perl ./Configure \
         --prefix=${STAGE1_SYSROOT}/usr \
         --openssldir=${STAGE1_SYSROOT}/etc/ssl \
         --libdir=lib \
@@ -216,5 +238,26 @@ RUN cmake \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
 
-RUN ln -svnf ${STAGE1_SYSROOT} /toolchain
-RUN rm -rf ${STAGE0_SYSROOT}
+# We need a shell. It is not optional if we want to keep building in a container
+WORKDIR /sources/bash
+COPY bash-fix-missing-header.patch /
+RUN patch -p1 < /bash-fix-missing-header.patch && \
+    ./configure \
+        --prefix=${STAGE1_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --without-bash-malloc \
+    && make -j64 \
+    && make install
+RUN ln -sv bash ${STAGE1_SYSROOT}/usr/bin/sh
+
+RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
+    && ln -sv ${STAGE1_SYSROOT}/usr/bin/sh /compat/bin/sh \
+    && ln -sv ${STAGE1_SYSROOT} /compat/hack/toolchain
+
+FROM scratch
+COPY --from=phase1 /sysroots/stage1 /sysroots/stage1
+#COPY --from=phase1 /compat/etc /etc
+COPY --from=phase1 /compat/tmp /tmp
+COPY --from=phase1 /compat/bin /bin
+COPY --from=phase1 /compat/hack/ /
