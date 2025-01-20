@@ -1,32 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG FROM=localhost/phase0:latest
 
-####
-# When building with Docker/Podman the `RUN` statements are executed with
-# `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root
-# `/bin/sh` -> `/toolchain/bin/sh`. We need to setup the appropriate symlinks
-# and then `COPY` them into the container before `RUN` will work. We use the
-# busybox image because it is tiny, but any image with `mkdir` and `ln` will
-# work for this building this compat layer.
-#
-# /compat/hack/toolchain -> /sysroots/musl
-# /compat/bin/sh         -> /sysroots/musl/usr/bin/sh
-# /compat/etc/ssl        -> /sysroots/musl/etc/ssl
-# /compat/tmp/
-#
-# TODO: patch openssl build to check /toolchain/etc/ssl
-# TODO: patch mktemp to use /toolchain/tmp
-#
-# we *want* our toolchain image to contain only a symlink and a sysroot dir
-# /toolchain -> /sysroots/musl
-# /sysroots/musl/...
-####
-FROM docker.io/library/busybox:stable-musl AS oci-compat
-RUN mkdir -p /compat/hack /compat/bin /compat/etc /compat/tmp \
-    && ln -sv /sysroots/musl /compat/hack/toolchain \
-    && ln -sv /sysroots/musl/usr/bin/sh /compat/bin/sh \
-    && ln -sv /sysroots/musl/etc/ssl /compat/etc/ssl
-
 #####
 # We have a toolchain with:
 #   clang
@@ -42,54 +16,14 @@ RUN mkdir -p /compat/hack /compat/bin /compat/etc /compat/tmp \
 #
 # Where do we go now?
 FROM ${FROM} AS phase1
-COPY --from=oci-compat /compat/etc /etc
-COPY --from=oci-compat /compat/tmp /tmp
-COPY --from=oci-compat /compat/bin /bin
-COPY --from=oci-compat /compat/hack/ /
 
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/sccache
 ENV CARGO_HOME=/cargo
 ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
 ENV STAGE0_SYSROOT=/sysroots/musl
 ENV STAGE1_SYSROOT=/sysroots/stage1
-ENV PATH="${STAGE1_SYSROOT}/usr/bin:${STAGE0_SYSROOT}/usr/bin"
-
-ENV    CFLAGS="--sysroot=${STAGE0_SYSROOT}"
-ENV  CXXFLAGS="--sysroot=${STAGE0_SYSROOT}"
-ENV   LDFLAGS="--sysroot=${STAGE0_SYSROOT}"
-ENV RUSTFLAGS="--sysroot=${STAGE0_SYSROOT}"
-
-# Setup symlinks to ALL THE THINGS
-RUN coreutils ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ln \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/basename \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cat \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/chmod \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/comm \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cp \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/cut \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/date \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/dirname \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/echo \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/env \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/expr \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/head \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/ls \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mkdir \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/mv \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/pwd \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rm \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/rmdir \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sleep \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/sort \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/split \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tee \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/test \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/touch \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/tr \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/true \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uname \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/uniq \
-    && ln -sv coreutils ${STAGE0_SYSROOT}/usr/bin/wc \
-    && ln -sv diffutils ${STAGE0_SYSROOT}/usr/bin/cmp
+ENV PATH="${STAGE0_SYSROOT}/usr/bin"
 
 WORKDIR ${STAGE1_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
@@ -99,6 +33,7 @@ RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv . toolchain
 
 # Install linux headers (needed for musl libc)
+# llvm sanitizers need linux headers for asm/param.h
 WORKDIR /sources/linux
 RUN make LLVM=1 -j64 headers \
     && find usr/include -type f ! -name '*.h' -delete \
@@ -115,27 +50,10 @@ RUN echo "${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${STAGE1_SYSROOT}/etc/ld-m
     && ln -sf libc.so ${STAGE1_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
     && ln -sf ../lib/libc.so ${STAGE1_SYSROOT}/usr/bin/ldd
 
-# Install compiler-rt, libc++, libc++abi, and libunwind
-WORKDIR /sources/llvm-project
-COPY musl-llvm.cmake /
-RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
-    && cmake -S llvm -B build -G "Unix Makefiles" \
-        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
-        -D MUSL_SYSROOT=${STAGE1_SYSROOT} \
-        -C /musl-llvm.cmake \
-    && cmake --build build --target runtimes --parallel 64 \
-    && cmake --build build --target install-runtimes
-
-ENV    CFLAGS="--sysroot=${STAGE1_SYSROOT}"
-ENV  CXXFLAGS="--sysroot=${STAGE1_SYSROOT}"
-ENV   LDFLAGS="--sysroot=${STAGE1_SYSROOT}"
-ENV RUSTFLAGS="--sysroot=${STAGE1_SYSROOT}"
-
 # perl wants system zlib
 # openssl wants system zlib
 WORKDIR /sources/zlib
-RUN sed -i -e 's|^if test \$shared -eq 1; then$|if test \$shared -eq 0; then|' configure \
-    && ./configure --prefix=${STAGE1_SYSROOT}/usr \
+RUN ./configure --prefix=${STAGE1_SYSROOT}/usr \
     && make -j64 \
     && make install \
     && rm -v ${STAGE1_SYSROOT}/lib/libz.a
@@ -156,47 +74,10 @@ RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefi
     && ln -sv libbz2.so.1     ${STAGE1_SYSROOT}/usr/lib/libbz2.so \
     && rm -v ${STAGE1_SYSROOT}/lib/libbz2.a
 
-# openssl needs perl
-WORKDIR /sources/perl
-RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
-    && sh Configure -des \
-        -D libc=__REPLACE_LIBDIR__/${MUSL_TRIPLE}/libc.so \
-        -D prefix=__REPLACE_PREFIX__ \
-        -D vendorprefix=__REPLACE_PREFIX__ \
-        -D bin=__REPLACE_PREFIX__/bin \
-        -D vendorbin=__REPLACE_PREFIX__/bin \
-        -D vendorscript=__REPLACE_PREFIX__/bin \
-        -D privlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
-        -D archlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
-        -D sitelib=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
-        -D sitearch=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
-        -D vendorlib=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
-        -D vendorarch=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
-        -D pager="/toolchain/usr/bin/less -isR" \
-        -D userelocatableinc \
-        -D useshrplib \
-        -D usethreads \
-    && sed -i \
-           -e 's|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
-           -e 's|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
-           Makefile \
-    && sed -i \
-           -e '/^[^=]*install[^=]*=/ s|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
-           -e '/^[^=]*install[^=]*=/ s|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
-           Policy.sh \
-           config.sh \
-    && sed -i \
-           -e 's|__REPLACE_PREFIX__|.../..|g' \
-           -e 's|__REPLACE_LIBDIR__|.../../lib|g' \
-           config.sh \
-           Policy.sh \
-    && make -j64 \
-    && make install
-
 # cargo needs openssl-sys
 # cmake wants openssl
 WORKDIR /sources/openssl
-RUN CC=cc CXX=cxx ${STAGE1_SYSROOT}/usr/bin/perl ./Configure \
+RUN CC=cc CXX=c++ perl ./Configure \
         --prefix=${STAGE1_SYSROOT}/usr \
         --openssldir=${STAGE1_SYSROOT}/etc/ssl \
         --libdir=lib \
@@ -205,59 +86,192 @@ RUN CC=cc CXX=cxx ${STAGE1_SYSROOT}/usr/bin/perl ./Configure \
     && make -j64 \
     && make install_sw
 
-WORKDIR /sources/make
-RUN ./configure \
-        --prefix=${STAGE1_SYSROOT}/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/cmake
-RUN cmake \
-        -B build \
+WORKDIR /sources/llvm-project
+COPY musl-llvm.cmake llvm-toolchain-prefix.patch /
+RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    patch -p1 < /llvm-toolchain-prefix.patch \
+    && cmake -S llvm -B /opt/llvm-build -G Ninja \
+        -D CMAKE_C_COMPILER_LAUNCHER=sccache \
+        -D CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+        -D CMAKE_SYSROOT=${STAGE1_SYSROOT} \
         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
-    && cmake --build build --parallel 64 \
-    && cmake --build build --target install
+        -D TRIPLE=${MUSL_TRIPLE} \
+        -C /musl-llvm.cmake \
+    && cmake --build /opt/llvm-build --target install
+
+COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
+ENV RUSTFLAGS="--sysroot=${STAGE1_SYSROOT}"
+
+# Build rust again with the patched musl-dynamic target
+WORKDIR /sources/rustc
+COPY rust-dynamic-musl-target.patch /
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    patch -p1 < /rust-dynamic-musl-target.patch \
+    && ./configure \
+        --set=build.jobs=64 \
+        --set=build.cargo=${STAGE0_SYSROOT}/bin/cargo \
+        --set=build.cargo-clippy=${STAGE0_SYSROOT}/bin/cargo-clippy \
+        --set=build.rustc=${STAGE0_SYSROOT}/bin/rustc \
+        --set=build.rustfmt=${STAGE0_SYSROOT}/bin/rustfmt \
+        --set=build.host=${MUSL_TRIPLE} \
+        --set=build.build=${MUSL_TRIPLE} \
+        --set=build.target=${MUSL_TRIPLE} \
+        --set=install.prefix=${STAGE1_SYSROOT}/usr \
+        --set=install.sysconfdir=etc \
+        --set=llvm.use-libcxx=true \
+        --set=rust.llvm-libunwind=system \
+        --set=target.${MUSL_TRIPLE}.llvm-config=${STAGE1_SYSROOT}/bin/llvm-config \
+    && python3 x.py build -j64 \
+    && python3 x.py install
 
 WORKDIR /sources/python
 RUN ./configure \
         --prefix=${STAGE1_SYSROOT}/usr \
         --build=${MUSL_TRIPLE} \
         --host=${MUSL_TRIPLE} \
+        --enable-optimizations \
+        --with-lto \
         --enable-shared \
         --without-ensurepip \
     && make -j64 \
     && make install
 
-WORKDIR /sources/ninja
-RUN cmake \
-        -B build \
-        -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
-        -D BUILD_TESTING=OFF \
-    && cmake --build build --parallel 64 \
-    && cmake --build build --target install
+WORKDIR /git_sources/sccache
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo install --root ${STAGE1_SYSROOT}/usr --path ./ --features native-zlib
 
-# We need a shell. It is not optional if we want to keep building in a container
-WORKDIR /sources/bash
-COPY bash-fix-missing-header.patch /
-RUN patch -p1 < /bash-fix-missing-header.patch && \
-    ./configure \
-        --prefix=${STAGE1_SYSROOT}/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-        --without-bash-malloc \
-    && make -j64 \
-    && make install
-RUN ln -sv bash ${STAGE1_SYSROOT}/usr/bin/sh
+WORKDIR /git_sources/coreutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo install --root ${STAGE1_SYSROOT}/usr --path ./ --features unix
+
+WORKDIR /git_sources/findutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo install --root ${STAGE1_SYSROOT}/usr --path ./
+
+WORKDIR /git_sources/diffutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo install --root ${STAGE1_SYSROOT}/usr --path ./
 
 RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
     && ln -sv ${STAGE1_SYSROOT}/usr/bin/sh /compat/bin/sh \
     && ln -sv ${STAGE1_SYSROOT} /compat/hack/toolchain
 
+# ###
+# # GNU tools
+# WORKDIR /sources/make
+# RUN ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#     && make -j64 \
+#     && make install
+# 
+# WORKDIR /sources/gawk
+# RUN ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#         --disable-extensions \
+#     && make -j64 \
+#     && make install
+# 
+# WORKDIR /sources/grep
+# RUN ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#     && make -j64 \
+#     && make install
+# 
+# WORKDIR /sources/sed
+# RUN ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#     && make -j64 \
+#     && make install
+# 
+# # TODO: Drop this once all sources exist in the git mirror. Use git apply after
+# WORKDIR /sources/patch
+# RUN ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#     && make -j64 \
+#     && make install
+# 
+# # We need a shell. It is not optional if we want to keep building in a container
+# WORKDIR /sources/bash
+# COPY bash-fix-missing-header.patch /
+# RUN patch -p1 < /bash-fix-missing-header.patch && \
+#     ./configure \
+#         --prefix=${STAGE1_SYSROOT}/usr \
+#         --build=${MUSL_TRIPLE} \
+#         --host=${MUSL_TRIPLE} \
+#         --without-bash-malloc \
+#     && make -j64 \
+#     && make install
+# RUN ln -sv bash ${STAGE1_SYSROOT}/usr/bin/sh
+# # END GNU tools
+# ###
+# 
+# WORKDIR /sources/perl
+# RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
+#     && sh Configure -des \
+#         -D libc=__REPLACE_LIBDIR__/${MUSL_TRIPLE}/libc.so \
+#         -D prefix=__REPLACE_PREFIX__ \
+#         -D vendorprefix=__REPLACE_PREFIX__ \
+#         -D bin=__REPLACE_PREFIX__/bin \
+#         -D vendorbin=__REPLACE_PREFIX__/bin \
+#         -D vendorscript=__REPLACE_PREFIX__/bin \
+#         -D privlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+#         -D archlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+#         -D sitelib=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+#         -D sitearch=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+#         -D vendorlib=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
+#         -D vendorarch=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
+#         -D userelocatableinc \
+#         -D useshrplib \
+#         -D usethreads \
+#     && sed -i \
+#            -e 's|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
+#            -e 's|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
+#            Makefile \
+#     && sed -i \
+#            -e '/^[^=]*install[^=]*=/ s|__REPLACE_PREFIX__|'${STAGE1_SYSROOT}'/usr|g' \
+#            -e '/^[^=]*install[^=]*=/ s|__REPLACE_LIBDIR__|'${STAGE1_SYSROOT}'/usr/lib|g' \
+#            Policy.sh \
+#            config.sh \
+#     && sed -i \
+#            -e 's|__REPLACE_PREFIX__|.../..|g' \
+#            -e 's|__REPLACE_LIBDIR__|.../../lib|g' \
+#            config.sh \
+#            Policy.sh \
+#     && make -j64 \
+#     && make install
+# 
+# WORKDIR /sources/cmake
+# RUN cmake \
+#         -B build \
+#         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
+#     && cmake --build build --parallel 64 \
+#     && cmake --build build --target install
+# 
+# WORKDIR /sources/ninja
+# RUN cmake \
+#         -B build \
+#         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
+#         -D BUILD_TESTING=OFF \
+#     && cmake --build build --parallel 64 \
+#     && cmake --build build --target install
+
 FROM scratch
 COPY --from=phase1 /sysroots/stage1 /sysroots/stage1
-#COPY --from=phase1 /compat/etc /etc
 COPY --from=phase1 /compat/tmp /tmp
 COPY --from=phase1 /compat/bin /bin
 COPY --from=phase1 /compat/hack/ /

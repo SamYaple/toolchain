@@ -151,36 +151,51 @@ RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefi
     && rm -fv ${MUSL_SYSROOT}/usr/lib/libbz2.a
 
 # openssl needs perl
-# FIXME: make perl search dir relative OR /toolchain
 WORKDIR /sources/perl
 RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
     && sh Configure -des \
-        -D libc="${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libc.so" \
-        -D prefix=${MUSL_SYSROOT}/usr \
-        -D vendorprefix=${MUSL_SYSROOT}/usr \
-        -D privlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/core_perl \
-        -D archlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/core_perl \
-        -D sitelib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/site_perl \
-        -D sitearch=${MUSL_SYSROOT}/usr/lib/perl5/5.40/site_perl \
-        -D vendorlib=${MUSL_SYSROOT}/usr/lib/perl5/5.40/vendor_perl \
-        -D vendorarch=${MUSL_SYSROOT}/usr/lib/perl5/5.40/vendor_perl \
-        -D pager="${MUSL_SYSROOT}/usr/bin/less -isR" \
+        -D libc=__REPLACE_LIBDIR__/${MUSL_TRIPLE}/libc.so \
+        -D prefix=__REPLACE_PREFIX__ \
+        -D vendorprefix=__REPLACE_PREFIX__ \
+        -D bin=__REPLACE_PREFIX__/bin \
+        -D vendorbin=__REPLACE_PREFIX__/bin \
+        -D vendorscript=__REPLACE_PREFIX__/bin \
+        -D privlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+        -D archlib=__REPLACE_LIBDIR__/perl5/5.40/core_perl \
+        -D sitelib=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+        -D sitearch=__REPLACE_LIBDIR__/perl5/5.40/site_perl \
+        -D vendorlib=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
+        -D vendorarch=__REPLACE_LIBDIR__/perl5/5.40/vendor_perl \
+        -D userelocatableinc \
         -D useshrplib \
         -D usethreads \
+    && sed -i \
+           -e 's|__REPLACE_PREFIX__|'${MUSL_SYSROOT}'/usr|g' \
+           -e 's|__REPLACE_LIBDIR__|'${MUSL_SYSROOT}'/usr/lib|g' \
+           Makefile \
+    && sed -i \
+           -e '/^[^=]*install[^=]*=/ s|__REPLACE_PREFIX__|'${MUSL_SYSROOT}'/usr|g' \
+           -e '/^[^=]*install[^=]*=/ s|__REPLACE_LIBDIR__|'${MUSL_SYSROOT}'/usr/lib|g' \
+           Policy.sh \
+           config.sh \
+    && sed -i \
+           -e 's|__REPLACE_PREFIX__|.../..|g' \
+           -e 's|__REPLACE_LIBDIR__|.../../lib|g' \
+           config.sh \
+           Policy.sh \
     && make -j64 \
     && make install
 
-# cargo tries to compile openssl-sys. Install it early so python can also use
-# it during its build for consistency throughout.
+# cargo needs openssl-sys
+# cmake wants openssl
 WORKDIR /sources/openssl
-RUN CC=cc CXX=cxx ./config \
+RUN CC=cc CXX=cxx ${MUSL_SYSROOT}/usr/bin/perl ./Configure \
         --prefix=${MUSL_SYSROOT}/usr \
         --openssldir=${MUSL_SYSROOT}/etc/ssl \
         --libdir=lib \
         shared \
         zlib-dynamic \
     && make -j64 \
-    && sed -i '/INSTALL_LIBS/s/libcrypto.a libssl.a//' Makefile \
     && make install_sw
 
 # rust bootstrap uses python
@@ -301,6 +316,64 @@ RUN patch -p1 < /patches/rust/dynamic-musl-target.patch \
 
 RUN rm -rfv ${RUST_BOOTSTRAP}
 
+WORKDIR /sources/cmake
+RUN ./bootstrap --parallel=64 -- \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/ninja
+RUN cmake \
+        -B build \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+        -D BUILD_TESTING=OFF \
+    && cmake --build build --parallel 64 \
+    && cmake --build build --target install
+
+###
+# GNU tools
+WORKDIR /sources/make
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/gawk
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+        --disable-extensions \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/grep
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/sed
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
+# TODO: Drop this once all sources exist in the git mirror. Use git apply after
+WORKDIR /sources/patch
+RUN ./configure \
+        --prefix=${MUSL_SYSROOT}/usr \
+        --build=${MUSL_TRIPLE} \
+        --host=${MUSL_TRIPLE} \
+    && make -j64 \
+    && make install
+
 # We need a shell. It is not optional if we want to keep building in a container
 WORKDIR /sources/bash
 COPY patches/bash /patches/bash
@@ -313,55 +386,86 @@ RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
     && make -j64 \
     && make install
 RUN ln -sv bash ${MUSL_SYSROOT}/usr/bin/sh
+# End GNU tools
+###
 
-WORKDIR /sources/sed
-RUN ./configure \
-        --prefix=${MUSL_SYSROOT}/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
+# Steal the ca-certs from curl image so `cargo` will fetch properly.
+# TODO: plugin the CA cert for the local git mirror
+COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
 
-WORKDIR /sources/grep
-RUN ./configure \
-        --prefix=${MUSL_SYSROOT}/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-    && make -j64 \
-    && make install
-
-# FIXME: we steal debians cacerts from /etc/ssl
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install -y ca-certificates
-RUN cp -av /etc/ssl /sysroots/musl/etc/ssl
-
-WORKDIR /git_sources/coreutils
+WORKDIR /git_sources/sccache
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    cargo install --root ${MUSL_SYSROOT}/usr --path ./ --features unix
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./ --features native-zlib
 
-WORKDIR /git_sources/findutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    cargo install --root ${MUSL_SYSROOT}/usr --path ./
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/sccache
 
 WORKDIR /git_sources/diffutils
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
     cargo install --root ${MUSL_SYSROOT}/usr --path ./
 
-WORKDIR /sources/cmake
-RUN ./bootstrap --parallel=64 -- \
-        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-    && make -j64 \
-    && make install
+WORKDIR /git_sources/findutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./
 
-WORKDIR /sources/gawk
-RUN sed -ie 's|extras||' Makefile.in \
-    && ./configure \
-        --prefix=${MUSL_SYSROOT}/usr \
-        --build=${MUSL_TRIPLE} \
-        --host=${MUSL_TRIPLE} \
-        --disable-extensions \
-    && make -j64 \
-    && make install
+WORKDIR /git_sources/coreutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${MUSL_SYSROOT}/usr --path ./ --features unix
+
+# Setup symlinks to ALL THE THINGS (or some of them... honestly there are a lot)
+RUN coreutils ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ln \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/basename \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/cat \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/chmod \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/comm \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/cp \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/cut \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/date \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/dirname \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/echo \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/env \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/expr \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/head \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/ls \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/mkdir \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/mv \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/pwd \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/rm \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/rmdir \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/sleep \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/sort \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/split \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/tee \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/test \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/touch \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/tr \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/true \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/uname \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/uniq \
+    && ln -sv coreutils ${MUSL_SYSROOT}/usr/bin/wc \
+    && ln -sv diffutils ${MUSL_SYSROOT}/usr/bin/cmp
+
+# When building with Docker/Podman the `RUN` statements are executed with
+# `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root
+# `/bin/sh` -> `/toolchain/bin/sh`. We need to setup the appropriate symlinks
+# and then `COPY` them into the container before `RUN` will work. We use the
+# busybox image because it is tiny, but any image with `mkdir` and `ln` will
+# work for this building this compat layer.
+#
+# /compat/hack/toolchain -> /sysroots/musl
+# /compat/bin/sh         -> /sysroots/musl/usr/bin/sh
+# /compat/tmp/
+#
+# TODO: patch mktemp to use /toolchain/tmp
+RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
+    && ln -sv /sysroots/musl /compat/hack/toolchain \
+    && ln -sv /sysroots/musl/usr/bin/sh /compat/bin/sh
 
 FROM scratch
 COPY --from=phase0 /sysroots/musl /sysroots/musl
+COPY --from=phase0 /compat/tmp /tmp
+COPY --from=phase0 /compat/bin /bin
+COPY --from=phase0 /compat/hack/ /
