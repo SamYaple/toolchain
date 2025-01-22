@@ -45,8 +45,7 @@ RUN ./configure --prefix="${STAGE1_SYSROOT}/usr" \
     && make -j64 \
     && make install
 
-RUN echo "${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${STAGE1_SYSROOT}/etc/ld-musl-x86_64.path \
-    && echo "${STAGE1_SYSROOT}/usr/lib"            >> ${STAGE1_SYSROOT}/etc/ld-musl-x86_64.path \
+RUN echo "/toolchain/usr/lib" >> ${STAGE1_SYSROOT}/etc/ld-musl-x86_64.path \
     && ln -sf libc.so ${STAGE1_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
     && ln -sf ../lib/libc.so ${STAGE1_SYSROOT}/usr/bin/ldd
 
@@ -86,6 +85,9 @@ RUN CC=cc CXX=c++ perl ./Configure \
     && make -j64 \
     && make install_sw
 
+#RUN ln -sv . ${STAGE1_SYSROOT}/usr/include/${MUSL_TRIPLE} \
+#    && ln -sv . ${STAGE1_SYSROOT}/usr/lib/${MUSL_TRIPLE}
+
 WORKDIR /sources/llvm-project
 COPY musl-llvm.cmake llvm-toolchain-prefix.patch /
 RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
@@ -94,13 +96,20 @@ RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
         -D CMAKE_C_COMPILER_LAUNCHER=sccache \
         -D CMAKE_CXX_COMPILER_LAUNCHER=sccache \
         -D CMAKE_SYSROOT=${STAGE1_SYSROOT} \
+        -D DEFAULT_SYSROOT=${STAGE1_SYSROOT} \
         -D CMAKE_INSTALL_PREFIX=${STAGE1_SYSROOT}/usr \
-        -D TRIPLE=${MUSL_TRIPLE} \
         -C /musl-llvm.cmake \
-    && cmake --build /opt/llvm-build --target install
+    && cmake --build /opt/llvm-build --target runtimes \
+    && cmake --build /opt/llvm-build --target install-runtimes \
+    && cmake --build /opt/llvm-build --target stage2-distribution \
+    || cat /git_sources/llvm-project/build/tools/clang/stage2-bins/CMakeFiles/CMakeError.log && false \
+    && cmake --build /opt/llvm-build --target stage2-install-distribution
 
 COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
-ENV RUSTFLAGS="--sysroot=${STAGE1_SYSROOT}"
+#ENV RUSTFLAGS="--sysroot=${STAGE0_SYSROOT}"
+RUN ln -sv ../../${MUSL_TRIPLE}/c++/v1/__config_site ${STAGE0_SYSROOT}/usr/include/c++/v1/__config_site \
+    && cd ${STAGE0_SYSROOT}/usr/lib/${MUSL_TRIPLE} \
+    && for f in *; do ln -sv ${MUSL_TRIPLE}/${f} ../${f}; done
 
 # Build rust again with the patched musl-dynamic target
 WORKDIR /sources/rustc
@@ -110,10 +119,10 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     patch -p1 < /rust-dynamic-musl-target.patch \
     && ./configure \
         --set=build.jobs=64 \
-        --set=build.cargo=${STAGE0_SYSROOT}/bin/cargo \
-        --set=build.cargo-clippy=${STAGE0_SYSROOT}/bin/cargo-clippy \
-        --set=build.rustc=${STAGE0_SYSROOT}/bin/rustc \
-        --set=build.rustfmt=${STAGE0_SYSROOT}/bin/rustfmt \
+        --set=build.cargo=${STAGE0_SYSROOT}/usr/bin/cargo \
+        --set=build.cargo-clippy=${STAGE0_SYSROOT}/usr/bin/cargo-clippy \
+        --set=build.rustc=${STAGE0_SYSROOT}/usr/bin/rustc \
+        --set=build.rustfmt=${STAGE0_SYSROOT}/usr/bin/rustfmt \
         --set=build.host=${MUSL_TRIPLE} \
         --set=build.build=${MUSL_TRIPLE} \
         --set=build.target=${MUSL_TRIPLE} \
@@ -121,7 +130,7 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
         --set=install.sysconfdir=etc \
         --set=llvm.use-libcxx=true \
         --set=rust.llvm-libunwind=system \
-        --set=target.${MUSL_TRIPLE}.llvm-config=${STAGE1_SYSROOT}/bin/llvm-config \
+        --set=target.${MUSL_TRIPLE}.llvm-config=${STAGE1_SYSROOT}/usr/bin/llvm-config \
     && python3 x.py build -j64 \
     && python3 x.py install
 
