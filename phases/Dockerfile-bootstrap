@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG FROM=docker.io/library/debian:bookworm-slim
 
-FROM ${FROM} as base
+FROM ${FROM} as bootstrap
 # The buildkit cache used for apt is setup here, and used throughout the
 # Dockerfile. The `docker-clean` apt configuration conflicts with this way of
 # caching and must be removed. This is the only time `apt-get update`.
@@ -14,7 +14,6 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 ENV BOOTSTRAP_TRIPLE=x86_64-phiban-linux-gnu
 ENV BOOTSTRAP_SYSROOT=/bootstrap
 
-FROM base as bootstrap
 # Create a new sysroot and extract glibc with relevant kernel header files. This
 # gets us a minimal glibc sysroot with no c++ support.
 WORKDIR ${BOOTSTRAP_SYSROOT}

@@ -10,16 +10,21 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 # Setup some common variables used throughout the build process, but not in the
 # final produced image. No trickery going on here, just some helper vars.
 ENV GLIBC_SYSROOT=/sysroots/glibc
-ENV GLIBC_TRIPLE=x86_64-unknown-linux-gnu
+ENV GLIBC_TRIPLE=x86_64-phiban-linux-gnu
 ENV MUSL_SYSROOT=/sysroots/musl
-ENV MUSL_TRIPLE=x86_64-unknown-linux-musl
+ENV MUSL_TRIPLE=x86_64-phiban-linux-musl
 ENV CARGO_HOME=/cargo
+ENV CCACHE_DIR=/ccache
+ENV CCACHE_CPP2=yes
+ENV CCACHE_HASHDIR=yes
 ENV PATH="${GLIBC_SYSROOT}/usr/bin:${PATH}"
 
 # Copy over the /sysroots/glibc that was created in the bootstrap image. This
 # sysroot has our target version of clang and llvm, linked against `glibc` and
 # `libc++`. No other tooling is installed in the sysroot, it is minimal.
-COPY --from=localhost/bootstrap:latest ${GLIBC_SYSROOT} ${GLIBC_SYSROOT}
+COPY --from=localhost/bootstrap:latest /bootstrap ${GLIBC_SYSROOT}
+RUN ln -sv clang ${GLIBC_SYSROOT}/bin/c++ \
+    && ln -sv clang ${GLIBC_SYSROOT}/bin/cc
 
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y make
@@ -43,12 +48,11 @@ RUN make HOSTCFLAGS="--sysroot=${GLIBC_SYSROOT}" HOSTLDFLAGS="--sysroot=${GLIBC_
 # `/toolchain/etc/ld-musl-x86_64.path` look into `/toolchain/usr` vs `/usr`.
 # This further isolates our new toolchain from any host files.
 WORKDIR /sources/musl
-RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib --prefix="${MUSL_SYSROOT}/usr" \
+RUN ./configure CFLAGS="--sysroot=${GLIBC_SYSROOT}" --prefix="${MUSL_SYSROOT}/usr" \
     && make -j64 \
-    && make install
-RUN rm -v /lib/ld-musl-x86_64.so.1 \
-    && echo "${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
-    && echo "${MUSL_SYSROOT}/usr/lib"               >> ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
+    && make install \
+    && rm -v /lib/ld-musl-x86_64.so.1 \
+    && echo "${MUSL_SYSROOT}/usr/lib" > ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path \
     && ln -svf libc.so ${MUSL_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
     && ln -svf ../lib/libc.so ${MUSL_SYSROOT}/usr/bin/ldd
 
@@ -57,51 +61,38 @@ RUN apt-get autoremove --purge -y make
 
 # We use the following utils for building LLVM
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y cmake python3 ninja-build patch
+    apt-get install --no-install-recommends -y cmake python3 ninja-build patch ccache
 
 WORKDIR /sources/llvm-project
-COPY musl-llvm.cmake musl-stage1-only.cmake /
+COPY llvm.cmake /
 COPY patches/llvm-project /patches/llvm-project
-RUN sed -ie '/^  OBJECT_LIBS RTSanitizerCommon RTSanitizerCommonLibc$/d' compiler-rt/lib/ctx_profile/CMakeLists.txt \
-    && patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
-    && cmake -S llvm -B /opt/llvm-build -G Ninja \
-        -D GLIBC_SYSROOT=${GLIBC_SYSROOT} \
-        -D GLIBC_TRIPLE=${GLIBC_TRIPLE} \
-        -D MUSL_SYSROOT=${MUSL_SYSROOT} \
-        -D MUSL_TRIPLE=${MUSL_TRIPLE} \
-        -C /musl-stage1-only.cmake \
-        -C /musl-llvm.cmake \
-    && cmake --build /opt/llvm-build --target runtimes \
-    && cmake --build /opt/llvm-build --target install-runtimes \
-    && cmake --build /opt/llvm-build --target stage2-distribution \
-    && cmake --build /opt/llvm-build --target stage2-install-distribution
+RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-phase0 \
+    patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
+    && cmake -S llvm -B build -G Ninja \
+        -D CMAKE_C_COMPILER_LAUNCHER=ccache \
+        -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -D BUILD_SYSROOT=${GLIBC_SYSROOT} \
+        -D BUILD_TRIPLE=${GLIBC_TRIPLE} \
+        -D TARGET_SYSROOT=${MUSL_SYSROOT} \
+        -D TARGET_TRIPLE=${MUSL_TRIPLE} \
+        -D STATIC_CORE=ON \
+        -D LLVM_BUILD_LTO=OFF \
+        -C /llvm.cmake \
+    && cmake --build build --target runtimes \
+    && cmake --build build --target install-runtimes \
+    && cmake --build build --target stage2-distribution \
+    && cmake --build build --target stage2-install-distribution
 
 # We no longer use anything glibc in the build; trash it!
+RUN apt-get autoremove --purge -y cmake python3 ninja-build ccache
 RUN rm -rf ${GLIBC_SYSROOT}
-
-RUN apt-get autoremove --purge -y cmake python3 ninja-build
-
-# I could use the cmake build to setup these symlinks, but for now I am doing it
-# directly. This will allow most of the remaining builds to detect which tools
-# to use.
-WORKDIR ${MUSL_SYSROOT}
-RUN ln -sv clang           bin/cc \
-    && ln -sv clang++      bin/c++ \
-    && ln -sv lld          bin/ld \
-    && ln -sv llvm-ar      bin/ar \
-    && ln -sv llvm-nm      bin/nm \
-    && ln -sv llvm-objcopy bin/objcopy \
-    && ln -sv llvm-objdump bin/objdump \
-    && ln -sv llvm-ranlib  bin/ranlib \
-    && ln -sv llvm-readelf bin/readelf \
-    && ln -sv llvm-size    bin/size \
-    && ln -sv llvm-strings bin/strings \
-    && ln -sv llvm-strip   bin/strip
 
 ENV PATH="${MUSL_SYSROOT}/usr/bin:${PATH}"
 ENV CFLAGS="--sysroot=${MUSL_SYSROOT}"
 ENV CXXFLAGS="--sysroot=${MUSL_SYSROOT}"
 ENV LDFLAGS="--sysroot=${MUSL_SYSROOT}"
+
+RUN ln -sv lld ${MUSL_SYSROOT}/bin/ld
 
 # Bootstrap GNU `make`, using the `./build.sh` bootstrap script
 WORKDIR /sources/make
@@ -133,8 +124,8 @@ COPY patches/zlib /patches/zlib
 RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
     && ./configure --prefix=${MUSL_SYSROOT}/usr \
     && make -j64 \
-    && make install
-RUN rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
+    && make install \
+    && rm -fv ${MUSL_SYSROOT}/usr/lib/libz.a
 
 # perl wants system bzip2
 WORKDIR /sources/bzip2
@@ -154,7 +145,7 @@ RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefi
 WORKDIR /sources/perl
 RUN export BUILD_ZLIB=False BUILD_BZIP2=0 \
     && sh Configure -des \
-        -D libc=__REPLACE_LIBDIR__/${MUSL_TRIPLE}/libc.so \
+        -D libc=__REPLACE_LIBDIR__/libc.so \
         -D prefix=__REPLACE_PREFIX__ \
         -D vendorprefix=__REPLACE_PREFIX__ \
         -D bin=__REPLACE_PREFIX__/bin \
@@ -216,6 +207,21 @@ RUN ./configure --prefix=${MUSL_SYSROOT}/usr --disable-static \
     && make install
 RUN ln -sv pkgconf ${MUSL_SYSROOT}/usr/bin/pkg-config
 
+# rust bootstrapping needs this (because of the target json?)
+WORKDIR /sources/cmake
+RUN ./bootstrap --parallel=64 -- \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/ninja
+RUN cmake \
+        -B build \
+        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
+        -D BUILD_TESTING=OFF \
+    && cmake --build build --parallel 64 \
+    && cmake --build build --target install
+
 #### RUST BOOTSTRAPPING start
 ENV RUSTBOOTSTRAP=/rustbootstrap
 RUN mkdir ${RUSTBOOTSTRAP}
@@ -223,18 +229,18 @@ RUN mkdir ${RUSTBOOTSTRAP}
 # the stage0 compiler downloaded is linked against `libgcc_s` which we do not
 # have. We can build a compat layer manually. We remove this after building
 # rust the first time.
-WORKDIR /sources/llvm-project/llvm-libgcc
+WORKDIR /git_sources/llvm-project/llvm-libgcc
 RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && clang --sysroot=${MUSL_SYSROOT} -nostdlib \
         -Wl,--version-script,gcc_s.ver \
         -Wl,--whole-archive \
         ${MUSL_SYSROOT}/usr/lib/clang/19/lib/${MUSL_TRIPLE}/libclang_rt.builtins.a \
-        ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libunwind.a \
+        ${MUSL_SYSROOT}/usr/lib/libunwind.a \
         -Wl,-soname,libgcc_s.so.1.0 \
         -lc -shared -o libgcc_s.so.1.0 \
-    && install -m 0644 ./libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
-    && ln -sv libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
-    && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so \
+    && install -m 0644 ./libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
+    && ln -sv libgcc_s.so.1.0 ${MUSL_SYSROOT}/usr/lib/libgcc_s.so.1 \
+    && ln -sv libgcc_s.so.1   ${MUSL_SYSROOT}/usr/lib/libgcc_s.so \
     && ln -sv ${MUSL_SYSROOT}/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 \
     && ln -sv ${MUSL_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
 
@@ -244,6 +250,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install -y curl
 
 WORKDIR /sources/rustc
+COPY x86_64-phiban-linux-musl.json /
 COPY patches/rust /patches/rust
 RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
     patch -p1 < /patches/rust/dynamic-musl-target.patch \
@@ -253,16 +260,17 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
         --set=build.jobs=64 \
         --set=build.docs=false \
         --set=build.host=${MUSL_TRIPLE} \
-        --set=build.build=${MUSL_TRIPLE} \
-        --set=build.target=${MUSL_TRIPLE} \
+        --set=build.build=x86_64-unknown-linux-musl \
+        --set=build.target=/${MUSL_TRIPLE}.json \
         --set=install.prefix=${RUSTBOOTSTRAP} \
         --set=install.sysconfdir=etc \
         --set=llvm.use-libcxx=true \
         --set=rust.llvm-libunwind=system \
-        --set=rust.lto=off \
         --set=rust.musl-root=${MUSL_SYSROOT}/usr \
         --set=target.${MUSL_TRIPLE}.crt-static=false \
-        --set=target.${MUSL_TRIPLE}.llvm-config=/opt/llvm-build/tools/clang/stage2-bins/bin/llvm-config \
+        --set=target.${MUSL_TRIPLE}.llvm-config=${MUSL_SYSROOT}/usr/bin/llvm-config \
+        --set=target.x86_64-unknown-linux-musl.crt-static=false \
+        --set=target.x86_64-unknown-linux-musl.llvm-config=${MUSL_SYSROOT}/usr/bin/llvm-config \
     && ./x.py build -j64 \
     && ./x.py install
 
@@ -270,9 +278,9 @@ RUN --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
 #       against libunwind and `/toolchain` now. `libgcc_s` and `curl` are no
 #       longer needed.
 RUN apt-get autoremove --purge -y curl
-RUN rm -v ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1.0 \
-          ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so.1 \
-          ${MUSL_SYSROOT}/usr/lib/${MUSL_TRIPLE}/libgcc_s.so \
+RUN rm -v ${MUSL_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
+          ${MUSL_SYSROOT}/usr/lib/libgcc_s.so.1 \
+          ${MUSL_SYSROOT}/usr/lib/libgcc_s.so \
           /lib/ld-musl-x86_64.so.1 \
           /etc/ld-musl-x86_64.path
 #### RUST BOOTSTRAPPING end
@@ -309,26 +317,11 @@ RUN patch -p1 < /patches/rust/dynamic-musl-target.patch \
         --set=install.sysconfdir=etc \
         --set=llvm.use-libcxx=true \
         --set=rust.llvm-libunwind=system \
-        --set=rust.lto=off \
-        --set=target.${MUSL_TRIPLE}.llvm-config=/opt/llvm-build/tools/clang/stage2-bins/bin/llvm-config \
+        --set=target.${MUSL_TRIPLE}.llvm-config=${MUSL_SYSROOT}/usr/bin/llvm-config \
     && ./x.py build -j64 \
     && ./x.py install
 
 RUN rm -rfv ${RUST_BOOTSTRAP}
-
-WORKDIR /sources/cmake
-RUN ./bootstrap --parallel=64 -- \
-        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/ninja
-RUN cmake \
-        -B build \
-        -D CMAKE_INSTALL_PREFIX=${MUSL_SYSROOT}/usr \
-        -D BUILD_TESTING=OFF \
-    && cmake --build build --parallel 64 \
-    && cmake --build build --target install
 
 ###
 # GNU tools

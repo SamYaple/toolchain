@@ -13,11 +13,11 @@ set(CMAKE_INSTALL_PREFIX ${TARGET_SYSROOT}/usr CACHE STRING "")
 # Setup CMAKE_SYSROOT for all stages, runtimes, and builtins.
 if ("${BUILD_SYSROOT}" STREQUAL "")
     message(STATUS "BUILD_SYSROOT is empty or unset; using host for `stage1` build.")
-    set(RUNTIMES_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
-    set(BUILTINS_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
 else()
     set(CMAKE_SYSROOT ${BUILD_SYSROOT} CACHE STRING "")
 endif()
+set(RUNTIMES_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
+set(BUILTINS_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
 
 # This accounts for the situation where the BUILD_TRIPLE and TARGET_TRIPLE are
 # different, like when moving from glibc to musl libc.
@@ -28,12 +28,17 @@ if (NOT ("${BUILD_TRIPLE}" STREQUAL "${TARGET_TRIPLE}"))
     set(LLVM_DEFAULT_TARGET_TRIPLE ${TARGET_TRIPLE} CACHE STRING "")
 endif()
 
+# This is hard to autodetect; matching the triple should be good enough
+if ("${TARGET_TRIPLE}" MATCHES ".*-musl$")
+    set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_HAS_MUSL_LIBC ON CACHE BOOL "")
+endif()
+
+# Statically link as much as possible to detach from the host toolchain. This
+# step is not strictly neeed, but it has proven effective at isolating the
+# stage1 compiler from the stage2. We get hard failures instead of mis-linked
+# toolchains.
 set(STATIC_CORE OFF CACHE BOOL "disable shared libs and statically link")
 if (STATIC_CORE)
-    # Statically link as much as possible to detach from the host toolchain.
-    # This step is not strictly neeed, but it has proven effective at isolating
-    # the stage1 compiler from the stage2. We get hard failures instead of
-    # mis-linked toolchains.
     set(LLVM_LINK_LLVM_DYLIB        OFF CACHE BOOL "")
     set(LLVM_STATIC_LINK_CXX_STDLIB ON  CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_ENABLE_STATIC_UNWINDER ON CACHE BOOL "")
@@ -51,7 +56,7 @@ if (STATIC_CORE)
     set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_ENABLE_SHARED   OFF CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_ENABLE_SHARED      OFF CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_INSTALL_LIBRARY OFF CACHE BOOL "")
-    set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SCUDO_STANDALONE_BUILD_SHARED   OFF CACHE BOOL "")
+    set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SCUDO_STANDALONE_BUILD_SHARED OFF CACHE BOOL "")
 endif()
 
 # gotta go fast
@@ -85,6 +90,7 @@ set(LLVM_USE_RELATIVE_PATHS_IN_FILES ON CACHE BOOL "")
 set(LLVM_INSTALL_BINUTILS_SYMLINKS ON CACHE BOOL "")
 set(LLVM_INSTALL_CCTOOLS_SYMLINKS  ON CACHE BOOL "")
 set(LLVM_USE_SYMLINKS              ON CACHE BOOL "")
+set(CLANG_LINKS_TO_CREATE "cc;c++;cpp;clang++;clang-cl;clang-cpp" CACHE STRING "")
 
 # Configure all of our builtins and runtimes link to each other ♥
 set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")
