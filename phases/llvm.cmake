@@ -1,23 +1,23 @@
 # LLVM build for `phiban`
 
 # Exit as early as possible if proper vars are not set.
-if ("${TARGET_SYSROOT}" STREQUAL "" OR 
-    "${TARGET_TRIPLE}"  STREQUAL "" OR
-    "${BUILD_TRIPLE}"   STREQUAL "")
-    message(FATAL_ERROR "BUILD_TRIPLE, TARGET_TRIPLE, and TARGET_SYSROOT must be set")
+if ("${BUILD_TRIPLE}" STREQUAL "" OR "${TARGET_TRIPLE}" STREQUAL "")
+    message(FATAL_ERROR "BUILD_TRIPLE and TARGET_TRIPLE must be set")
 endif()
-
-# Setup install directory for final stage builds
-set(CMAKE_INSTALL_PREFIX ${TARGET_SYSROOT}/usr CACHE STRING "")
 
 # Setup CMAKE_SYSROOT for all stages, runtimes, and builtins.
-if ("${BUILD_SYSROOT}" STREQUAL "")
-    message(STATUS "BUILD_SYSROOT is empty or unset; using host for `stage1` build.")
-else()
+if (NOT ("${BUILD_SYSROOT}" STREQUAL ""))
     set(CMAKE_SYSROOT ${BUILD_SYSROOT} CACHE STRING "")
 endif()
-set(RUNTIMES_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
-set(BUILTINS_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
+
+# During phase0 builds, we dont use sysroots at all.
+if ("${TARGET_SYSROOT}" STREQUAL "")
+    set(CMAKE_INSTALL_PREFIX /usr CACHE STRING "")
+else()
+    set(CMAKE_INSTALL_PREFIX ${TARGET_SYSROOT}/usr CACHE STRING "")
+    set(RUNTIMES_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
+    set(BUILTINS_${TARGET_TRIPLE}_CMAKE_SYSROOT ${TARGET_SYSROOT} CACHE STRING "")
+endif()
 
 # This accounts for the situation where the BUILD_TRIPLE and TARGET_TRIPLE are
 # different, like when moving from glibc to musl libc.
@@ -49,14 +49,14 @@ if (STATIC_CORE)
     set(RUNTIMES_${TARGET_TRIPLE}_SANITIZER_USE_STATIC_LLVM_UNWINDER ON CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY ON CACHE BOOL "")
 
-    # Even less neccesary, we distable the shared libraries entirely. This has
-    # the added value that the first time we install a shared lib, it will have
-    # been built with the proper, up-to-date compiler.
-    set(RUNTIMES_${TARGET_TRIPLE}_LIBUNWIND_ENABLE_SHARED   OFF CACHE BOOL "")
-    set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_ENABLE_SHARED   OFF CACHE BOOL "")
-    set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_ENABLE_SHARED      OFF CACHE BOOL "")
-    set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_INSTALL_LIBRARY OFF CACHE BOOL "")
-    set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SCUDO_STANDALONE_BUILD_SHARED OFF CACHE BOOL "")
+    # # Even less neccesary, we distable the shared libraries entirely. This has
+    # # the added value that the first time we install a shared lib, it will have
+    # # been built with the proper, up-to-date compiler.
+    # set(RUNTIMES_${TARGET_TRIPLE}_LIBUNWIND_ENABLE_SHARED   OFF CACHE BOOL "")
+    # set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_ENABLE_SHARED   OFF CACHE BOOL "")
+    # set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_ENABLE_SHARED      OFF CACHE BOOL "")
+    # set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_INSTALL_LIBRARY OFF CACHE BOOL "")
+    # set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SCUDO_STANDALONE_BUILD_SHARED OFF CACHE BOOL "")
 endif()
 
 # gotta go fast
@@ -90,7 +90,6 @@ set(LLVM_USE_RELATIVE_PATHS_IN_FILES ON CACHE BOOL "")
 set(LLVM_INSTALL_BINUTILS_SYMLINKS ON CACHE BOOL "")
 set(LLVM_INSTALL_CCTOOLS_SYMLINKS  ON CACHE BOOL "")
 set(LLVM_USE_SYMLINKS              ON CACHE BOOL "")
-set(CLANG_LINKS_TO_CREATE "cc;c++;cpp;clang++;clang-cl;clang-cpp" CACHE STRING "")
 
 # Configure all of our builtins and runtimes link to each other ♥
 set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")
@@ -205,7 +204,10 @@ set(LLVM_DISTRIBUTION_COMPONENTS
   runtimes
 
   clang-resource-headers
-  llvm-headers # rust *needs* this
+  clang-libraries
+
+  llvm-headers
+  llvm-libraries
 
   ${LLVM_TOOLCHAIN_TOOLS}
   ${LLVM_TOOLCHAIN_UTILITIES}

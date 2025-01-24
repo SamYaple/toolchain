@@ -15,6 +15,5 @@ build() {
         phases
 }
 
-#build bootstrap
 build phase0
 #build phase1
