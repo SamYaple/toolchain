@@ -17,13 +17,11 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt \
 
 ENV TRIPLE=x86_64-phiban-linux-musl
 ENV PHASE0_SYSROOT=/sysroots/phase0
-ENV PHASE1_SYSROOT=/sysroots/phase1
-ENV PHASE2_SYSROOT=/sysroots/phase2
 
 FROM base as bootstrap
 # These tools are nice to have, but not strictly required to build LLVM
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y git ccache patch
+    apt-get install --no-install-recommends -y git ccache
 
 # The ccache data is stored in a buildkit style volume mount. As long as the
 # build directory isn't changing, it will cache both stage1 and stage2 builds.
@@ -67,14 +65,8 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-bootstrap \
         -D STATIC_CORE=ON \
         -D LLVM_BUILD_LTO=OFF \
         -C /llvm.cmake \
-    && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes \
-    && cmake --build build --target stage2-distribution \
     && cmake --build build --target stage2-install-distribution
-
-# Install make for musl and linux headers bootstrapping
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install --no-install-recommends -y make
 
 # Remove debian host packages that were only used to build llvm. This includes
 # binutils as well.
@@ -89,6 +81,10 @@ RUN ln -sv lld /usr/bin/ld \
     && ln -sv clang /usr/bin/c++ \
     && ln -sv llvm-ar /usr/bin/ar \
     && ln -sv llvm-ar /usr/bin/ranlib
+
+# Install make for musl and linux headers bootstrapping
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install --no-install-recommends -y make
 
 # Setup base filesystem structure
 WORKDIR ${PHASE0_SYSROOT}
@@ -112,12 +108,15 @@ WORKDIR /sources/musl
 RUN ./configure --prefix="${PHASE0_SYSROOT}/usr" \
     && make -j64 \
     && make install \
-    && rm -v /lib/ld-musl-x86_64.so.1 \
     && echo "/toolchain/usr/lib" > ${PHASE0_SYSROOT}/etc/ld-musl-x86_64.path \
     && ln -svf libc.so ${PHASE0_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
-    && ln -svf ../lib/libc.so ${PHASE0_SYSROOT}/usr/bin/ldd
+    && ln -svf ../lib/libc.so ${PHASE0_SYSROOT}/usr/bin/ldd \
+    && rm -v /lib/ld-musl-x86_64.so.1
 
 RUN apt-get autoremove --purge -y make
+
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install --no-install-recommends -y patch
 
 # The cmake file `llvm.cmake` is commented for further reading.
 WORKDIR /git_sources/llvm-project
@@ -134,12 +133,9 @@ RUN --mount=type=cache,target=${CCACHE_DIR},id=ccache-phase0 \
         -D TARGET_TRIPLE=${TRIPLE} \
         -D STATIC_CORE=ON \
         -C /llvm.cmake \
-    && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes \
-    && cmake --build build --target stage2-distribution \
-    && cmake --build build --target stage2-install-distribution
-
-RUN ln -sv lld ${PHASE0_SYSROOT}/usr/bin/ld \
+    && cmake --build build --target stage2-install-distribution \
+    && ln -sv lld   ${PHASE0_SYSROOT}/usr/bin/ld \
     && ln -sv clang ${PHASE0_SYSROOT}/usr/bin/cc \
     && ln -sv clang ${PHASE0_SYSROOT}/usr/bin/c++ \
     && ln -sv clang ${PHASE0_SYSROOT}/usr/bin/cpp
@@ -166,16 +162,6 @@ RUN patch -p1 < /patches/make/fix-bootstrap.patch \
 
 RUN apt-get autoremove --purge -y patch
 
-# Reset the build image! Copy only the sysroot over, which completely isolated
-FROM base as phase0
-COPY --from=bootstrap ${PHASE0_SYSROOT} ${PHASE0_SYSROOT}
-RUN ln -sv ${PHASE0_SYSROOT} /toolchain
-ENV PATH="${PHASE0_SYSROOT}/usr/bin:${PATH}"
-
-ENV   CFLAGS="--sysroot=${PHASE0_SYSROOT}"
-ENV CXXFLAGS="--sysroot=${PHASE0_SYSROOT}"
-ENV  LDFLAGS="--sysroot=${PHASE0_SYSROOT}"
-
 WORKDIR /sources/patch
 RUN ./configure \
         --prefix=${PHASE0_SYSROOT}/usr \
@@ -183,6 +169,22 @@ RUN ./configure \
         --host=${TRIPLE} \
     && make -j64 \
     && make install
+
+# Reset the build image! Copy only the sysroot over, which is isolated
+FROM base as phase0
+COPY --from=bootstrap ${PHASE0_SYSROOT} ${PHASE0_SYSROOT}
+RUN ln -sv ${PHASE0_SYSROOT} /toolchain
+ENV PATH="${PHASE0_SYSROOT}/usr/bin:${PATH}"
+
+ENV   CFLAGS="--sysroot=${PHASE0_SYSROOT} -O3 -march=native"
+ENV CXXFLAGS="--sysroot=${PHASE0_SYSROOT} -O3 -march=native"
+ENV  LDFLAGS="--sysroot=${PHASE0_SYSROOT}"
+
+WORKDIR /sources/pkgconf
+RUN ./configure --prefix=${PHASE0_SYSROOT}/usr --disable-static \
+    && make -j64 \
+    && make install
+RUN ln -sv pkgconf ${PHASE0_SYSROOT}/usr/bin/pkg-config
 
 # rust bootstrap needs to extract tar.gz archives from pythons tarfile
 # perl wants system zlib
@@ -270,60 +272,21 @@ RUN ./configure \
 
 # rust bootstrapping needs this (because of the target json?)
 WORKDIR /sources/cmake
-RUN ./bootstrap --parallel=64 -- \
-        -D CMAKE_INSTALL_PREFIX=${PHASE0_SYSROOT}/usr \
+RUN ./bootstrap --parallel=64 -- -D CMAKE_INSTALL_PREFIX=${PHASE0_SYSROOT}/usr \
     && make -j64 \
     && make install
 
 WORKDIR /sources/ninja
-RUN cmake \
-        -B build \
-        -D CMAKE_INSTALL_PREFIX=${PHASE0_SYSROOT}/usr \
-        -D BUILD_TESTING=OFF \
+RUN cmake -B build \
+          -D CMAKE_INSTALL_PREFIX=${PHASE0_SYSROOT}/usr \
+          -D BUILD_TESTING=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
 
-WORKDIR /sources/gawk
-RUN ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-        --disable-extensions \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/grep
-RUN ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/sed
-RUN ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-    && make -j64 \
-    && make install
-
-# We need a shell. It is not optional if we want to keep building in a container
-WORKDIR /sources/bash
-COPY patches/bash /patches/bash
-RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
-    ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-        --without-bash-malloc \
-    && make -j64 \
-    && make install
-RUN ln -sv bash ${PHASE0_SYSROOT}/usr/bin/sh
-
-# the stage0 compiler downloaded is linked against `libgcc_s` which we do not
-# have. We can build a compat layer manually. We remove this after building
-# rust the first time.
+# the stage0 rust compiler is linked against `libgcc_s` which we do not have.
+# We can build a compat layer manually. We remove this after bootstrapping rust.
+# Similarly, the /etc/ld-musl-x86_64.path and /lib/ld-musl-x86_64.so.1 paths are
+# needed for the binary to find libc and other libs.
 WORKDIR /git_sources/llvm-project/llvm-libgcc
 RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
     && clang --sysroot=${PHASE0_SYSROOT} -nostdlib \
@@ -385,8 +348,7 @@ COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
 # TODO: show patched sccache which allows sysroots. TooHard or TooEasy...
 WORKDIR /git_sources/sccache
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    export OPENSSL_DIR=${PHASE0_SYSROOT}/usr \
-    && cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features native-zlib
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features native-zlib
 
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_DIR=/sccache
@@ -406,39 +368,109 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
     cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features unix
 
+WORKDIR /git_sources/gettext
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/git
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/make
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/patch
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/gawk
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --disable-extensions \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/grep
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/sed
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+# We need a shell. It is not optional if we want to keep building in a container
+WORKDIR /sources/bash
+COPY patches/bash /patches/bash
+RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
+    ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --without-bash-malloc \
+    && make -j64 \
+    && make install
+
 # Setup symlinks to ALL THE THINGS (or some of them... honestly there are a lot)
 WORKDIR ${PHASE0_SYSROOT}/usr/bin
-RUN coreutils ln -sv coreutils ln \
-           && ln -sv coreutils basename \
-           && ln -sv coreutils cat \
-           && ln -sv coreutils chmod \
-           && ln -sv coreutils comm \
-           && ln -sv coreutils cp \
-           && ln -sv coreutils cut \
-           && ln -sv coreutils date \
-           && ln -sv coreutils dirname \
-           && ln -sv coreutils echo \
-           && ln -sv coreutils env \
-           && ln -sv coreutils expr \
-           && ln -sv coreutils head \
-           && ln -sv coreutils ls \
-           && ln -sv coreutils mkdir \
-           && ln -sv coreutils mv \
-           && ln -sv coreutils pwd \
-           && ln -sv coreutils rm \
-           && ln -sv coreutils rmdir \
-           && ln -sv coreutils sleep \
-           && ln -sv coreutils sort \
-           && ln -sv coreutils split \
-           && ln -sv coreutils tee \
-           && ln -sv coreutils test \
-           && ln -sv coreutils touch \
-           && ln -sv coreutils tr \
-           && ln -sv coreutils true \
-           && ln -sv coreutils uname \
-           && ln -sv coreutils uniq \
-           && ln -sv coreutils wc \
-           && ln -sv diffutils cmp
+RUN ln -sv bash sh \
+    && ln -sv diffutils cmp \
+    && ln -sv coreutils basename \
+    && ln -sv coreutils cat \
+    && ln -sv coreutils chmod \
+    && ln -sv coreutils comm \
+    && ln -sv coreutils cp \
+    && ln -sv coreutils cut \
+    && ln -sv coreutils date \
+    && ln -sv coreutils dirname \
+    && ln -sv coreutils echo \
+    && ln -sv coreutils env \
+    && ln -sv coreutils expr \
+    && ln -sv coreutils head \
+    && ln -sv coreutils ln \
+    && ln -sv coreutils ls \
+    && ln -sv coreutils mkdir \
+    && ln -sv coreutils mv \
+    && ln -sv coreutils pwd \
+    && ln -sv coreutils rm \
+    && ln -sv coreutils rmdir \
+    && ln -sv coreutils sleep \
+    && ln -sv coreutils sort \
+    && ln -sv coreutils split \
+    && ln -sv coreutils tee \
+    && ln -sv coreutils test \
+    && ln -sv coreutils touch \
+    && ln -sv coreutils tr \
+    && ln -sv coreutils true \
+    && ln -sv coreutils uname \
+    && ln -sv coreutils uniq \
+    && ln -sv coreutils wc
 
 # When building with Docker/Podman the `RUN` statements are executed with
 # `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root

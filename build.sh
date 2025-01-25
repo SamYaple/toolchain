@@ -14,5 +14,5 @@ build() {
         phases
 }
 
-#build phase0
+build phase0
 build phase1

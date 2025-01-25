@@ -140,18 +140,6 @@ RUN ./configure --prefix=${PHASE0_SYSROOT}/usr \
     && make -j64 \
     && make install
 
-#WORKDIR /sources/python
-#RUN ./configure \
-#        --prefix=${PHASE1_SYSROOT}/usr \
-#        --build=${TRIPLE} \
-#        --host=${TRIPLE} \
-#        --enable-optimizations \
-#        --with-lto \
-#        --enable-shared \
-#        --without-ensurepip \
-#    && make -j64 \
-#    && make install
-
 WORKDIR /git_sources/sccache
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
@@ -171,6 +159,26 @@ WORKDIR /git_sources/diffutils
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
     cargo install --root ${PHASE1_SYSROOT}/usr --path ./
+
+WORKDIR /sources/pkgconf
+RUN ./configure --prefix=${PHASE1_SYSROOT}/usr --disable-static \
+    && make -j64 \
+    && make install
+RUN ln -sv pkgconf ${PHASE1_SYSROOT}/usr/bin/pkg-config
+
+ENV PATH="${PHASE1_SYSROOT}/usr/bin:${PATH}"
+
+WORKDIR /sources/python
+RUN ./configure \
+        --prefix=${PHASE1_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --enable-optimizations \
+        --with-lto \
+        --enable-shared \
+        --without-ensurepip \
+    && make -j64 \
+    && make install
 
 RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
     && ln -sv ${PHASE1_SYSROOT}/usr/bin/sh /compat/bin/sh \
@@ -287,8 +295,8 @@ RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
 
 # container image compat hack
 RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
-    && ln -sv ${PHASE0_SYSROOT} /compat/hack/toolchain \
-    && ln -sv ${PHASE0_SYSROOT}/usr/bin/sh /compat/bin/sh
+    && ln -sfv ${PHASE1_SYSROOT} /compat/hack/toolchain \
+    && ln -sfv ${PHASE1_SYSROOT}/usr/bin/sh /compat/bin/sh
 
 FROM scratch
 COPY --from=phase1 /sysroots/phase1 /sysroots/phase1
