@@ -463,6 +463,7 @@ RUN ln -sv bash sh \
     && ln -sv coreutils sleep \
     && ln -sv coreutils sort \
     && ln -sv coreutils split \
+    && ln -sv coreutils tail \
     && ln -sv coreutils tee \
     && ln -sv coreutils test \
     && ln -sv coreutils touch \
@@ -471,6 +472,14 @@ RUN ln -sv bash sh \
     && ln -sv coreutils uname \
     && ln -sv coreutils uniq \
     && ln -sv coreutils wc
+
+WORKDIR /git_sources/libffi
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
 
 # When building with Docker/Podman the `RUN` statements are executed with
 # `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root

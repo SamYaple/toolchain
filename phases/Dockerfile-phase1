@@ -13,6 +13,8 @@ ENV TRIPLE=x86_64-phiban-linux-musl
 ENV PHASE0_SYSROOT=/sysroots/phase0
 ENV PHASE1_SYSROOT=/sysroots/phase1
 ENV PATH="${PHASE0_SYSROOT}/usr/bin"
+ENV   CFLAGS="-O3 -march=native"
+ENV CXXFLAGS="-O3 -march=native"
 
 WORKDIR ${PHASE1_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
@@ -38,10 +40,18 @@ RUN echo "/toolchain/usr/lib" >> ${PHASE1_SYSROOT}/etc/ld-musl-x86_64.path \
     && ln -sf libc.so ${PHASE1_SYSROOT}/usr/lib/ld-musl-x86_64.so.1 \
     && ln -sf ../lib/libc.so ${PHASE1_SYSROOT}/usr/bin/ldd
 
+WORKDIR /sources/pkgconf
+RUN ./configure --prefix=${PHASE1_SYSROOT}/usr --disable-static \
+    && make -j64 \
+    && make install
+RUN ln -sv pkgconf ${PHASE1_SYSROOT}/usr/bin/pkg-config
+
 # perl wants system zlib
 # openssl wants system zlib
 WORKDIR /sources/zlib
-RUN ./configure --prefix=${PHASE1_SYSROOT}/usr \
+COPY patches/zlib /patches/zlib
+RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
+    && ./configure --prefix=${PHASE1_SYSROOT}/usr \
     && make -j64 \
     && make install \
     && rm -v ${PHASE1_SYSROOT}/lib/libz.a
@@ -74,8 +84,23 @@ RUN CC=cc CXX=c++ perl ./Configure \
     && make -j64 \
     && make install_sw
 
-#RUN ln -sv . ${PHASE1_SYSROOT}/usr/include/${TRIPLE} \
-#    && ln -sv . ${PHASE1_SYSROOT}/usr/lib/${TRIPLE}
+WORKDIR /git_sources/libffi
+RUN ./configure \
+        --prefix=${PHASE1_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /sources/python
+RUN ./configure \
+        --prefix=${PHASE1_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --enable-shared \
+        --without-ensurepip \
+    && make -j64 \
+    && make install
 
 WORKDIR /sources/llvm-project
 COPY llvm.cmake /
@@ -89,30 +114,16 @@ RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
         -D BUILD_TRIPLE=${TRIPLE} \
         -D TARGET_SYSROOT=${PHASE1_SYSROOT} \
         -D TARGET_TRIPLE=${TRIPLE} \
-        -D STATIC_CORE=ON \
         -C /llvm.cmake \
-    && cmake --build build --target runtimes \
     && cmake --build build --target install-runtimes \
-    && cmake --build build --target stage2-distribution \
     && cmake --build build --target stage2-install-distribution
-
-# TODO: pkg-config would prevent the need for this
-ENV OPENSSL_DIR="${PHASE1_SYSROOT}/usr"
-
-WORKDIR ${PHASE0_SYSROOT}/usr/bin
-RUN ln -sv coreutils tail
-
-WORKDIR /git_sources/libffi
-RUN ./configure --prefix=${PHASE1_SYSROOT}/usr \
-    && make -j64 \
-    && make install
 
 # This should be unneeded but we would have to patch rust search paths to look
 # under /toolchain to be a proper patch. Use sysroots to ensure it will find our
 # include and lib directories properly.
-ENV   CFLAGS="--sysroot=${PHASE1_SYSROOT}"
-ENV CXXFLAGS="--sysroot=${PHASE1_SYSROOT}"
-ENV  LDFLAGS="--sysroot=${PHASE1_SYSROOT}"
+#ENV   CFLAGS="--sysroot=${PHASE1_SYSROOT}"
+#ENV CXXFLAGS="--sysroot=${PHASE1_SYSROOT}"
+#ENV  LDFLAGS="--sysroot=${PHASE1_SYSROOT}"
 
 # Build rust again with the patched musl-dynamic target
 WORKDIR /git_sources/rust
@@ -135,11 +146,6 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     && python3 x.py build -j64 \
     && python3 x.py install
 
-WORKDIR /git_sources/libffi
-RUN ./configure --prefix=${PHASE0_SYSROOT}/usr \
-    && make -j64 \
-    && make install
-
 WORKDIR /git_sources/sccache
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
@@ -159,30 +165,6 @@ WORKDIR /git_sources/diffutils
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
     cargo install --root ${PHASE1_SYSROOT}/usr --path ./
-
-WORKDIR /sources/pkgconf
-RUN ./configure --prefix=${PHASE1_SYSROOT}/usr --disable-static \
-    && make -j64 \
-    && make install
-RUN ln -sv pkgconf ${PHASE1_SYSROOT}/usr/bin/pkg-config
-
-ENV PATH="${PHASE1_SYSROOT}/usr/bin:${PATH}"
-
-WORKDIR /sources/python
-RUN ./configure \
-        --prefix=${PHASE1_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-        --enable-optimizations \
-        --with-lto \
-        --enable-shared \
-        --without-ensurepip \
-    && make -j64 \
-    && make install
-
-RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
-    && ln -sv ${PHASE1_SYSROOT}/usr/bin/sh /compat/bin/sh \
-    && ln -sv ${PHASE1_SYSROOT} /compat/hack/toolchain
 
 # ###
 # # GNU tools
