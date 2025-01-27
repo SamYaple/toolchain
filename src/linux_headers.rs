@@ -4,13 +4,11 @@ use std::path::Path;
 use anyhow::Result;
 use crate::clone_repo;
 
-pub fn build_and_install() -> Result<()> {
+pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/linux", "v6.13")?;
 
     let source_dir = Path::new("/phiban/sources/linux");
     env::set_current_dir(source_dir)?;
-
-    let sysroot = "/sysroots/phase1";
 
     // TODO: Does this actually generate headers? or just copy them?
     cmd!{"make LLVM=1 -j64 headers"};

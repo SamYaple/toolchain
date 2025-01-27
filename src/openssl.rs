@@ -4,13 +4,12 @@ use std::path::Path;
 use anyhow::Result;
 use crate::clone_repo;
 
-pub fn build_and_install() -> Result<()> {
+pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/openssl", "openssl-3.4.0-tarball")?;
 
     let source_dir = Path::new("/phiban/sources/openssl");
     env::set_current_dir(source_dir)?;
 
-    let sysroot = "/sysroots/phase1";
     // TODO: do *not* set envvar outside of the spawned process
     unsafe {
         env::set_var("CC", "cc");

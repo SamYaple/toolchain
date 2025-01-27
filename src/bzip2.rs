@@ -8,13 +8,11 @@ use crate::clone_repo;
 use walkdir::WalkDir;
 use crate::cmd;
 
-pub fn build_and_install() -> Result<()> {
+pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/bzip2", "bzip2-1.0.8-tarball")?;
 
     let source_dir = Path::new("/phiban/sources/bzip2");
     env::set_current_dir(source_dir)?;
-
-    let sysroot = "/sysroots/phase1";
 
     let makefiles: Vec<String> = WalkDir::new(source_dir)
         .into_iter()

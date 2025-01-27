@@ -5,13 +5,12 @@ use std::path::Path;
 use anyhow::Result;
 use crate::clone_repo;
 
-pub fn build_and_install() -> Result<()> {
+pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/zlib", "v1.3.1-tarball")?;
 
     let source_dir = Path::new("/phiban/sources/zlib");
     env::set_current_dir(source_dir)?;
 
-    let sysroot = "/sysroots/phase1";
     // The configure script makes the assumption that a Linux (uname -s)
     // host will *always* have a zlib library. Since that is not the case
     // for our bootstrapping process, we override the LDSHARED var so the
