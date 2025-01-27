@@ -1,5 +1,5 @@
+use crate::cmd;
 use std::env;
-use std::process::Command;
 use std::path::Path;
 use anyhow::Result;
 use crate::clone_repo;
@@ -10,47 +10,16 @@ pub fn build_and_install() -> Result<()> {
     let source_dir = Path::new("/phiban/sources/linux");
     env::set_current_dir(source_dir)?;
 
-    let status = Command::new("make")
-        .arg("LLVM=1")
-        .arg("-j64")
-        .arg("headers")
-        .status()?;
+    let sysroot = "/sysroots/phase1";
 
-    if !status.success() {
-        dbg![status];
-        unimplemented!{"We don't handle this failure yet!"}
-    }
+    // TODO: Does this actually generate headers? or just copy them?
+    cmd!{"make LLVM=1 -j64 headers"};
 
     // `find` and `cp` are how we install the linux kernel headers as the
     // initial files for our sysroot. AFAIK there is no make target that can
     // help us here.
-
-    // TODO: Refactor into rust (maybe get fancy and reuse uutils/findutils
-    let status = Command::new("find")
-        .arg("usr/include")
-        .arg("-type").arg("f")
-        .arg("!")
-        .arg("-name")
-        .arg("*.h")
-        .arg("-delete")
-        .status()?;
-
-    if !status.success() {
-        dbg![status];
-        unimplemented!{"We don't handle this failure yet!"}
-    }
-
-    // TODO: Refactor into rust
-    let status = Command::new("cp")
-        .arg("-rv")
-        .arg("usr/include")
-        .arg("/sysroots/phase1/usr/include")
-        .status()?;
-
-    if !status.success() {
-        dbg![status];
-        unimplemented!{"We don't handle this failure yet!"}
-    }
+    cmd!{"find usr/local -type f ! -name *.h -delete"};
+    cmd!{"cp -rv usr/include {}/usr/include", sysroot};
 
     println!("Kernel headers install successful");
     Ok(())
