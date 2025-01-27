@@ -6,49 +6,6 @@ FROM ${FROM} AS phase1
 # steal ca-certs from curl image for cargo to use
 COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
 
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_DIR=/sccache
-ENV CARGO_HOME=/cargo
-ENV TRIPLE=x86_64-phiban-linux-musl
-ENV PHASE0_SYSROOT=/sysroots/phase0
-ENV PHASE1_SYSROOT=/sysroots/phase1
-ENV PATH="${PHASE0_SYSROOT}/usr/bin"
-ENV   CFLAGS="-O3 -march=native"
-ENV CXXFLAGS="-O3 -march=native"
-
-WORKDIR ${PHASE1_SYSROOT}
-RUN mkdir usr usr/bin usr/lib etc \
-    && ln -sv usr/lib lib \
-    && ln -sv usr/bin bin \
-    && ln -sv lib usr/lib64 \
-    && ln -sv . toolchain
-
-WORKDIR /sources/python
-RUN ./configure \
-        --prefix=${PHASE1_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-        --enable-shared \
-        --without-ensurepip \
-    && make -j64 \
-    && make install
-
-WORKDIR /sources/llvm-project
-COPY llvm.cmake /
-COPY patches/llvm-project /patches/llvm-project
-RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
-    patch -p1 < /patches/llvm-project/toolchain-prefix.patch \
-    && cmake -S llvm -B build -G Ninja \
-        -D CMAKE_C_COMPILER_LAUNCHER=sccache \
-        -D CMAKE_CXX_COMPILER_LAUNCHER=sccache \
-        -D BUILD_SYSROOT=${PHASE0_SYSROOT} \
-        -D BUILD_TRIPLE=${TRIPLE} \
-        -D TARGET_SYSROOT=${PHASE1_SYSROOT} \
-        -D TARGET_TRIPLE=${TRIPLE} \
-        -C /llvm.cmake \
-    && cmake --build build --target install-runtimes \
-    && cmake --build build --target stage2-install-distribution
-
 # This should be unneeded but we would have to patch rust search paths to look
 # under /toolchain to be a proper patch. Use sysroots to ensure it will find our
 # include and lib directories properly.
@@ -56,26 +13,6 @@ RUN --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
 #ENV CXXFLAGS="--sysroot=${PHASE1_SYSROOT}"
 #ENV  LDFLAGS="--sysroot=${PHASE1_SYSROOT}"
 
-# Build rust again with the patched musl-dynamic target
-WORKDIR /git_sources/rust
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
-    ./configure \
-        --set=build.jobs=64 \
-        --set=build.cargo=${PHASE0_SYSROOT}/usr/bin/cargo \
-        --set=build.cargo-clippy=${PHASE0_SYSROOT}/usr/bin/cargo-clippy \
-        --set=build.rustc=${PHASE0_SYSROOT}/usr/bin/rustc \
-        --set=build.rustfmt=${PHASE0_SYSROOT}/usr/bin/rustfmt \
-        --set=build.host=${TRIPLE} \
-        --set=build.build=${TRIPLE} \
-        --set=build.target=${TRIPLE} \
-        --set=install.prefix=${PHASE1_SYSROOT}/usr \
-        --set=install.sysconfdir=etc \
-        --set=llvm.use-libcxx=true \
-        --set=rust.llvm-libunwind=system \
-        --set=target.${TRIPLE}.llvm-config=${PHASE1_SYSROOT}/usr/bin/llvm-config \
-    && python3 x.py build -j64 \
-    && python3 x.py install
 
 WORKDIR /git_sources/sccache
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \

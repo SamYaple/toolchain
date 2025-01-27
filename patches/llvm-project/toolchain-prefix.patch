@@ -1,0 +1,78 @@
+diff --git a/clang/lib/Driver/ToolChains/Linux.cpp b/clang/lib/Driver/ToolChains/Linux.cpp
+index 35bf39069605..4931cefe25b8 100644
+--- a/clang/lib/Driver/ToolChains/Linux.cpp
++++ b/clang/lib/Driver/ToolChains/Linux.cpp
+@@ -213,7 +213,7 @@ static StringRef getOSLibDir(const llvm::Triple &Triple, const ArgList &Args) {
+   if (Triple.getArch() == llvm::Triple::riscv32)
+     return "lib32";
+ 
+-  return Triple.isArch32Bit() ? "lib" : "lib64";
++  return Triple.isArch32Bit() ? "toolchain/lib" : "toolchain/lib64";
+ }
+ 
+ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+@@ -316,8 +316,8 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+   }
+   Generic_GCC::AddMultilibPaths(D, SysRoot, OSLibDir, MultiarchTriple, Paths);
+ 
+-  addPathIfExists(D, concat(SysRoot, "/lib", MultiarchTriple), Paths);
+-  addPathIfExists(D, concat(SysRoot, "/lib/..", OSLibDir), Paths);
++  addPathIfExists(D, concat(SysRoot, "/toolchain/lib", MultiarchTriple), Paths);
++  addPathIfExists(D, concat(SysRoot, "/toolchain/lib/..", OSLibDir), Paths);
+ 
+   if (IsAndroid) {
+     // Android sysroots contain a library directory for each supported OS
+@@ -347,8 +347,8 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+ 
+   Generic_GCC::AddMultiarchPaths(D, SysRoot, OSLibDir, Paths);
+ 
+-  addPathIfExists(D, concat(SysRoot, "/lib"), Paths);
+-  addPathIfExists(D, concat(SysRoot, "/usr/lib"), Paths);
++  addPathIfExists(D, concat(SysRoot, "/toolchain/lib"), Paths);
++  addPathIfExists(D, concat(SysRoot, "/toolchain/usr/lib"), Paths);
+ }
+ 
+ ToolChain::RuntimeLibType Linux::GetDefaultRuntimeLibType() const {
+@@ -484,7 +484,7 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
+         Triple.getSubArch() == llvm::Triple::PPCSubArch_spe)
+       ArchName = "powerpc-sf";
+ 
+-    return "/lib/ld-musl-" + ArchName + ".so.1";
++    return "/toolchain/lib/ld-musl-" + ArchName + ".so.1";
+   }
+ 
+   std::string LibDir;
+@@ -642,7 +642,7 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+     return;
+ 
+   // LOCAL_INCLUDE_DIR
+-  addSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/usr/local/include"));
++  addSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/toolchain/usr/local/include"));
+   // TOOL_INCLUDE_DIR
+   AddMultilibIncludeArgs(DriverArgs, CC1Args);
+ 
+@@ -663,10 +663,10 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+   // /usr/include.
+   std::string MultiarchIncludeDir = getMultiarchTriple(D, getTriple(), SysRoot);
+   if (!MultiarchIncludeDir.empty() &&
+-      D.getVFS().exists(concat(SysRoot, "/usr/include", MultiarchIncludeDir)))
++      D.getVFS().exists(concat(SysRoot, "/toolchain/usr/include", MultiarchIncludeDir)))
+     addExternCSystemInclude(
+         DriverArgs, CC1Args,
+-        concat(SysRoot, "/usr/include", MultiarchIncludeDir));
++        concat(SysRoot, "/toolchain/usr/include", MultiarchIncludeDir));
+ 
+   if (getTriple().getOS() == llvm::Triple::RTEMS)
+     return;
+@@ -674,9 +674,9 @@ void Linux::AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+   // Add an include of '/include' directly. This isn't provided by default by
+   // system GCCs, but is often used with cross-compiling GCCs, and harmless to
+   // add even when Clang is acting as-if it were a system compiler.
+-  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/include"));
++  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/toolchain/include"));
+ 
+-  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/usr/include"));
++  addExternCSystemInclude(DriverArgs, CC1Args, concat(SysRoot, "/toolchain/usr/include"));
+ 
+   if (!DriverArgs.hasArg(options::OPT_nobuiltininc) && getTriple().isMusl())
+     addSystemInclude(DriverArgs, CC1Args, ResourceDirInclude);

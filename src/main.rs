@@ -8,6 +8,9 @@ mod openssl;
 mod bzip2;
 mod pkgconf;
 mod libffi;
+mod llvm;
+mod python;
+mod rust;
 
 use std::env;
 use std::path::Path;
@@ -31,8 +34,10 @@ fn main() -> Result<()> {
     //pkgconf::build_and_install(sysroot)?;
     //zlib::build_and_install(sysroot)?;
     //bzip2::build_and_install(sysroot)?;
-    libffi::build_and_install(sysroot)?;
     //openssl::build_and_install(sysroot)?;
+    //python::build_and_install(sysroot)?;
+    //llvm::build_and_install(sysroot)?;
+    rust::build_and_install(sysroot)?;
 
     std::fs::remove_dir_all("/phiban/sources")?;
     Ok(())

@@ -16,7 +16,7 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
     // `find` and `cp` are how we install the linux kernel headers as the
     // initial files for our sysroot. AFAIK there is no make target that can
     // help us here.
-    cmd!{"find usr/local -type f ! -name *.h -delete"};
+    cmd!{"find usr/include -type f ! -name *.h -delete"};
     cmd!{"cp -rv usr/include {}/usr/include", sysroot};
 
     println!("Kernel headers install successful");

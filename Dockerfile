@@ -18,7 +18,8 @@ ENV CXXFLAGS="-O3 -march=native"
 
 RUN mkdir -p /phiban/sources \
     && git config --global init.defaultBranch main \
-    && git config --global advice.detachedHead false
+    && git config --global advice.detachedHead false \
+    && git config --global protocol.file.allow always
 
 WORKDIR ${PHASE1_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
@@ -31,6 +32,9 @@ WORKDIR /git_sources/git-warp-time
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
     cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
+COPY patches /patches
+COPY configs /configs
 
 WORKDIR /phiban-bootstrap
 COPY Cargo.toml Cargo.toml
