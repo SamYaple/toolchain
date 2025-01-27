@@ -27,6 +27,11 @@ RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv lib usr/lib64 \
     && ln -sv . toolchain
 
+WORKDIR /git_sources/git-warp-time
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
 WORKDIR /phiban-bootstrap
 COPY Cargo.toml Cargo.toml
 COPY src src
