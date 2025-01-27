@@ -7,6 +7,7 @@ mod zlib;
 mod openssl;
 mod bzip2;
 mod pkgconf;
+mod libffi;
 
 use std::env;
 use std::path::Path;
@@ -25,12 +26,13 @@ fn clone_repo(repo_url: &str, repo_tag: &str) -> Result<()> {
 fn main() -> Result<()> {
     let sysroot = "/sysroots/phase1";
     //linux_headers::build_and_install(sysroot)?;
-    musl::build_and_install(sysroot)?;
-    make::build_and_install(sysroot)?;
-    pkgconf::build_and_install(sysroot)?;
-    zlib::build_and_install(sysroot)?;
-    bzip2::build_and_install(sysroot)?;
-    openssl::build_and_install(sysroot)?;
+    //musl::build_and_install(sysroot)?;
+    //make::build_and_install(sysroot)?;
+    //pkgconf::build_and_install(sysroot)?;
+    //zlib::build_and_install(sysroot)?;
+    //bzip2::build_and_install(sysroot)?;
+    libffi::build_and_install(sysroot)?;
+    //openssl::build_and_install(sysroot)?;
 
     std::fs::remove_dir_all("/phiban/sources")?;
     Ok(())

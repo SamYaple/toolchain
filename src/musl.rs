@@ -1,7 +1,7 @@
 use std::os::unix::fs::symlink;
 use crate::cmd;
 use std::env;
-use std::fs::{remove_file, write};
+use std::fs::write;
 use std::path::Path;
 use anyhow::Result;
 use crate::clone_repo;
