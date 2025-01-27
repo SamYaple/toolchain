@@ -16,11 +16,9 @@ ENV PATH="${PHASE0_SYSROOT}/usr/bin"
 ENV   CFLAGS="-O3 -march=native"
 ENV CXXFLAGS="-O3 -march=native"
 
-COPY Cargo.toml /phiban-bootstrap/
-COPY src        /phiban-bootstrap/src
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path /phiban-bootstrap
+RUN mkdir -p /phiban/sources \
+    && git config --global init.defaultBranch main \
+    && git config --global advice.detachedHead false
 
 WORKDIR ${PHASE1_SYSROOT}
 RUN mkdir usr usr/bin usr/lib etc \
@@ -28,12 +26,14 @@ RUN mkdir usr usr/bin usr/lib etc \
     && ln -sv usr/bin bin \
     && ln -sv lib usr/lib64 \
     && ln -sv . toolchain
-RUN mkdir -p /phiban/sources
 
-RUN git config --global init.defaultBranch main \
-    && git config --global advice.detachedHead false
-
-RUN phiban-bootstrap
+WORKDIR /phiban-bootstrap
+COPY Cargo.toml Cargo.toml
+COPY src src
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    cargo run || :
+RUN false
 
 # # container image compat hack
 # RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
