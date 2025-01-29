@@ -5,9 +5,10 @@ use anyhow::Result;
 use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    clone_repo("/git_sources/linux", "v6.13")?;
+    //clone_repo("/git_sources/linux", "v6.13")?;
 
-    let source_dir = Path::new("/phiban/sources/linux");
+    //let source_dir = Path::new("/phiban/sources/linux");
+    let source_dir = Path::new("/git_sources/linux");
     env::set_current_dir(source_dir)?;
 
     // TODO: Does this actually generate headers? or just copy them?

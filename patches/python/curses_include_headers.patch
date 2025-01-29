@@ -1,0 +1,19 @@
+diff --git a/Modules/_cursesmodule.c b/Modules/_cursesmodule.c
+index c6835738348..0031c4b5036 100644
+--- a/Modules/_cursesmodule.c
++++ b/Modules/_cursesmodule.c
+@@ -125,6 +125,14 @@ static const char PyCursesVersion[] = "2.2";
+ #undef columns
+ #endif
+ 
++#ifdef HAVE_NCURSES_H
++#include <ncurses.h>
++#endif
++
++#ifdef HAVE_CURSES_H
++#include <curses.h>
++#endif
++
+ #ifdef HAVE_LANGINFO_H
+ #include <langinfo.h>
+ #endif

@@ -4,6 +4,7 @@ set -euxEo pipefail
 
 FILES=(
     https://github.com/libffi/libffi/releases/download/v3.4.6/libffi-3.4.6.tar.gz
+    https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-4.0.0.tar.gz
 
     # no sig file; expected sha256 is 3a9080ac51d03615e7c1910a0a2a8df08424892b5f13b0628a204d3fcce0ea8b
     https://distfiles.ariadne.space/pkgconf/pkgconf-2.3.0.tar.xz
@@ -106,6 +107,9 @@ FILES=(
 
     https://ftpmirror.gnu.org/findutils/findutils-4.10.0.tar.xz
     https://ftpmirror.gnu.org/findutils/findutils-4.10.0.tar.xz.sig
+
+    https://ftp.gnu.org/gnu/gdbm/gdbm-1.24.tar.gz
+    https://ftp.gnu.org/gnu/gdbm/gdbm-1.24.tar.gz.sig
 )
 
 mkdir -p sources

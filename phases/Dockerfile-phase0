@@ -481,6 +481,11 @@ RUN ./configure \
     && make -j64 \
     && make install
 
+WORKDIR /git_sources/git-warp-time
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
 # When building with Docker/Podman the `RUN` statements are executed with
 # `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root
 # `/bin/sh` -> `/toolchain/bin/sh`. We need to setup the appropriate symlinks

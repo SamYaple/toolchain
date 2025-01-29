@@ -1,4 +1,4 @@
-use std::env;
+use std::env::{set_current_dir, set_var, remove_var};
 use std::fs::remove_file;
 use crate::cmd;
 use std::path::Path;
@@ -9,7 +9,7 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/zlib", "v1.3.1-tarball")?;
 
     let source_dir = Path::new("/phiban/sources/zlib");
-    env::set_current_dir(source_dir)?;
+    set_current_dir(source_dir)?;
 
     // The configure script makes the assumption that a Linux (uname -s)
     // host will *always* have a zlib library. Since that is not the case
@@ -17,11 +17,11 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
     // test passes appropriately.
     // TODO: do *not* set envvar outside of the spawned process
     unsafe {
-        env::set_var("LDSHARED", "cc -shared");
+        set_var("LDSHARED", "cc -shared");
     }
     cmd!{"./configure --prefix={}/usr", sysroot};
     unsafe {
-        env::remove_var("LDSHARED");
+        remove_var("LDSHARED");
     }
 
     cmd!{"make -j64"};
