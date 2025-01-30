@@ -19,6 +19,9 @@ mod gdbm;
 mod mpdecimal;
 mod util_linux;
 mod shadow;
+mod cmake;
+//mod ninja;
+//mod perl;
 
 use std::env::{remove_var, set_var, set_current_dir};
 use std::fs::create_dir;
@@ -27,7 +30,26 @@ use std::env;
 use std::path::Path;
 use anyhow::Result;
 
+pub const SOURCES_DIR: &'static str = "/phiban/sources";
 pub const TRIPLE: &'static str = "x86_64-phiban-linux-musl";
+
+fn clone_repo2(dest_dir: &str, repo_url: &str, repo_tag: &str, restore_metadata: bool) -> Result<()> {
+    if !Path::new(dest_dir).exists() {
+        cmd!{"git clone {} {}", repo_url, dest_dir};
+    }
+    set_current_dir(dest_dir)?;
+    cmd!{"git reset --hard"};
+    cmd!{"git clean -xdf"};
+    cmd!{"git fetch origin +refs/tags/{0}:refs/tags/{0}", repo_tag};
+    cmd!{"git checkout {}", repo_tag};
+    cmd!{"git reset --hard"};
+    cmd!{"git clean -xdf"};
+    if restore_metadata {
+        cmd!{"gtt restore"};
+    }
+
+    Ok(())
+}
 
 fn clone_repo(repo_url: &str, repo_tag: &str) -> Result<()> {
     let sources_dir = Path::new("/phiban/sources");
@@ -74,6 +96,7 @@ fn main() -> Result<()> {
         set_var("CXXFLAGS", format!{"--sysroot={sysroot}"});
         set_var("LDFLAGS", format!{"--sysroot={sysroot}"});
     }
+    make::build_and_install(sysroot)?;
     pkgconf::build_and_install(sysroot)?;
     libffi::build_and_install(sysroot)?;
 
@@ -90,22 +113,33 @@ fn main() -> Result<()> {
     sqlite::build_and_install(sysroot)?;
     mpdecimal::build_and_install(sysroot)?;
     shadow::build_and_install(sysroot)?;
-    util_linux::build_and_install(sysroot)?;
 
-    make::build_and_install(sysroot)?;
-    //cmake::build_and_install(sysroot)?;
-
+    // HACK: circular dependency solved by building python twice
+    //
+    //   - util-linux wants libpython (from python)
+    //   - python wants libuuid (from util-linux)
     python::build_and_install(sysroot)?;
+
+    util_linux::build_and_install(sysroot)?;
+    python::build_and_install(sysroot)?;
+
+    cmake::build_and_install(sysroot)?;
     //ninja::build_and_install(sysroot)?;
+
+    // We *could* reuse the build directory of the last llvm build, but I want
+    // everything in all the cmake configurations to detect correctly with all
+    // the new libraries in our new sysroot. This will make it a proper two
+    // stage build.
+    //std::fs::remove_dir_all("/git_sources/llvm/build")?;
+    //std::fs::remove_dir_all("/phiban/sources/llvm/build")?;
+    llvm::build_and_install(sysroot)?;
+    rust::build_and_install(sysroot)?;
 
     unsafe {
         remove_var("CFLAGS");
         remove_var("CXXFLAGS");
         remove_var("LDFLAGS");
     }
-
-    llvm::build_and_install(sysroot)?;
-    //rust::build_and_install(sysroot)?;
 
     // unneeded but i dont want to commit the 20GB of source that might be here
     std::fs::remove_dir_all("/phiban/sources")?;

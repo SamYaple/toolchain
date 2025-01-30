@@ -1,0 +1,21 @@
+diff --git a/configure b/configure
+index 79c56cb1..f4046c12 100755
+--- a/configure
++++ b/configure
+@@ -16803,12 +16803,11 @@ printf "%s\n" X/"$am_mf" |
+ 	    q
+ 	  }
+ 	  s/.*/./; q'`
+-    { echo "$as_me:$LINENO: cd "$am_dirpart" \
+-      && sed -e '/# am--include-marker/d' "$am_filepart" \
+-        | $MAKE -f - am--depfiles" >&5
++   {
+    (cd "$am_dirpart" \
+-      && sed -e '/# am--include-marker/d' "$am_filepart" \
+-        | $MAKE -f - am--depfiles) >&5 2>&5
++      && for dep in `sed -n '/# am--include-marker/d; /^am__depfiles_remade\s*=/ { s/^am__depfiles_remade\s*=\s*//; s/\\\s*/ /g; s/ /\n/g; s/\$(DEPDIR)/.deps/g; p }'`; do
++            mkdir -p "${dep%/*}" && echo "# dummy" > "${dep}"
++         done) >&5 2>&5
+    ac_status=$?
+    echo "$as_me:$LINENO: \$? = $ac_status" >&5
+    (exit $ac_status); } || am_rc=$?

@@ -32,6 +32,7 @@ COPY src src
 COPY patches /patches
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
+    --mount=type=cache,target=/phiban/sources,id=phiban-git-sources \
     RUST_BACKTRACE=1 cargo run || :
 RUN false
 # # container image compat hack
