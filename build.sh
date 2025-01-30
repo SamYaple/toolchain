@@ -10,8 +10,7 @@ build() {
         --volume ${PWD}/sources:/sources:O \
         --volume ${PWD}/git_sources:/git_sources:O \
         --tag ${phase} \
-        --file Dockerfile-${phase} \
-        phases
+        bootstrap
 }
 
 build phase0
