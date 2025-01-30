@@ -6,9 +6,8 @@ use anyhow::Result;
 use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/readline", "readline-8.2.13-tarball")?;
-    //let source_dir = Path::new("/phiban/sources/readline");
-    let source_dir = Path::new("/git_sources/readline");
+    clone_repo("/git_sources/readline", "readline-8.2.13-tarball")?;
+    let source_dir = Path::new("/phiban/sources/readline");
     set_current_dir(source_dir)?;
 
     cmd!{"chmod +x support/install.sh"};

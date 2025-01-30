@@ -6,10 +6,10 @@ use anyhow::Result;
 use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/sqlite", "version-3.48.0-tarball")?;
-    //let source_dir = Path::new("/phiban/sources/sqlite");
-    let source_dir = Path::new("/git_sources/sqlite");
+    clone_repo("/git_sources/sqlite", "sqlite-autoconf-3480000-tarball+gtt")?;
+    let source_dir = Path::new("/phiban/sources/sqlite");
     set_current_dir(source_dir)?;
+    cmd!{"gtt restore"};
 
     unsafe {
         set_var("CPPFLAGS", "-D SQLITE_ENABLE_COLUMN_METADATA=1 -D SQLITE_ENABLE_UNLOCK_NOTIFY=1 -D SQLITE_ENABLE_DBSTAT_VTAB=1 -D SQLITE_SECURE_DELETE=1");

@@ -15,4 +15,3 @@ build() {
 }
 
 build phase0
-build phase1

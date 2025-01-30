@@ -17,6 +17,8 @@ mod readline;
 mod sqlite;
 mod gdbm;
 mod mpdecimal;
+mod util_linux;
+mod shadow;
 
 use std::env::{remove_var, set_var, set_current_dir};
 use std::fs::create_dir;
@@ -31,7 +33,6 @@ fn clone_repo(repo_url: &str, repo_tag: &str) -> Result<()> {
     let sources_dir = Path::new("/phiban/sources");
     set_current_dir(sources_dir)?;
     cmd!{"git clone --single-branch --branch {} {}", repo_tag, repo_url};
-
     Ok(())
 }
 
@@ -57,46 +58,40 @@ fn init_fs_tree(sysroot: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let sysroot = "/sysroots/phase0";
-    libffi::build_and_install(sysroot)?;
-    mpdecimal::build_and_install(sysroot)?;
-    xz::build_and_install(sysroot)?;
-    ncurses::build_and_install(sysroot)?;
-    readline::build_and_install(sysroot)?;
-    gdbm::build_and_install(sysroot)?;
-    sqlite::build_and_install(sysroot)?;
-    python::build_and_install(sysroot)?;
-    panic!("at the disco");
-
     let sysroot = "/sysroots/phase1";
-    init_fs_tree(sysroot)?;
+    unsafe {
+        set_var("PATH", format!{"{sysroot}/usr/bin:/toolchain/usr/bin"});
+    }
 
-    // Base gets your headers, libc, libunwind, libc++, but no tooling 
+    // initial fs structure, headers, libc, libunwind, libc++, but no tooling
+    init_fs_tree(sysroot)?;
     linux_headers::build_and_install(sysroot)?;
     musl::build_and_install(sysroot)?;
     llvm::build_and_install_runtimes(sysroot)?;
 
     unsafe {
-          set_var("CFLAGS", format!{"--sysroot={sysroot}"});
+        set_var("CFLAGS", format!{"--sysroot={sysroot}"});
         set_var("CXXFLAGS", format!{"--sysroot={sysroot}"});
-         set_var("LDFLAGS", format!{"--sysroot={sysroot}"});
+        set_var("LDFLAGS", format!{"--sysroot={sysroot}"});
     }
-
     pkgconf::build_and_install(sysroot)?;
+    libffi::build_and_install(sysroot)?;
 
     zlib::build_and_install(sysroot)?;
     bzip2::build_and_install(sysroot)?;
     xz::build_and_install(sysroot)?;
-    libffi::build_and_install(sysroot)?;
-    ncurses::build_and_install(sysroot)?;
-    //perl::build_and_install(sysroot)?;
 
-    // I did consider libressl, and everything should work with it these days,
-    // but ultimately I am sticking with openssl. Though I may try to avoid the
-    // perl dep by pregenerating the asm.
+    //perl::build_and_install(sysroot)?;
     openssl::build_and_install(sysroot)?;
 
-    // Build tools
+    ncurses::build_and_install(sysroot)?;
+    readline::build_and_install(sysroot)?;
+    gdbm::build_and_install(sysroot)?;
+    sqlite::build_and_install(sysroot)?;
+    mpdecimal::build_and_install(sysroot)?;
+    shadow::build_and_install(sysroot)?;
+    util_linux::build_and_install(sysroot)?;
+
     make::build_and_install(sysroot)?;
     //cmake::build_and_install(sysroot)?;
 
@@ -104,9 +99,9 @@ fn main() -> Result<()> {
     //ninja::build_and_install(sysroot)?;
 
     unsafe {
-          remove_var("CFLAGS");
+        remove_var("CFLAGS");
         remove_var("CXXFLAGS");
-         remove_var("LDFLAGS");
+        remove_var("LDFLAGS");
     }
 
     llvm::build_and_install(sysroot)?;

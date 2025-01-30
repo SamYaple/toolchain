@@ -7,7 +7,6 @@ use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/zlib", "v1.3.1-tarball")?;
-
     let source_dir = Path::new("/phiban/sources/zlib");
     set_current_dir(source_dir)?;
 

@@ -1,0 +1,129 @@
+diff --git a/compiler/rustc_target/src/spec/mod.rs b/compiler/rustc_target/src/spec/mod.rs
+index 321ab40403a..7d2c8612081 100644
+--- a/compiler/rustc_target/src/spec/mod.rs
++++ b/compiler/rustc_target/src/spec/mod.rs
+@@ -1828,6 +1828,7 @@ fn $module() {
+     ("x86_64-unknown-hermit", x86_64_unknown_hermit),
+ 
+     ("x86_64-unikraft-linux-musl", x86_64_unikraft_linux_musl),
++    ("x86_64-phiban-linux-musl", x86_64_phiban_linux_musl),
+ 
+     ("armv7-unknown-trusty", armv7_unknown_trusty),
+     ("aarch64-unknown-trusty", aarch64_unknown_trusty),
+diff --git a/compiler/rustc_target/src/spec/targets/x86_64_phiban_linux_musl.rs b/compiler/rustc_target/src/spec/targets/x86_64_phiban_linux_musl.rs
+new file mode 100644
+index 00000000000..9aa91f34287
+--- /dev/null
++++ b/compiler/rustc_target/src/spec/targets/x86_64_phiban_linux_musl.rs
+@@ -0,0 +1,32 @@
++use crate::spec::{Cc, LinkerFlavor, Lld, SanitizerSet, StackProbeType, Target, TargetOptions, base};
++
++pub(crate) fn target() -> Target {
++    let mut base = TargetOptions { env: "musl".into(), ..base::linux::opts() };
++    base.cpu = "x86-64".into();
++    base.plt_by_default = false;
++    base.max_atomic_width = Some(64);
++    base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
++    base.stack_probes = StackProbeType::Inline;
++    base.static_position_independent_executables = true;
++    base.supported_sanitizers = SanitizerSet::ADDRESS
++        | SanitizerSet::CFI
++        | SanitizerSet::LEAK
++        | SanitizerSet::MEMORY
++        | SanitizerSet::THREAD;
++    base.supports_xray = true;
++
++    Target {
++        llvm_target: "x86_64-phiban-linux-musl".into(),
++        metadata: crate::spec::TargetMetadata {
++            description: Some("64-bit Linux".into()),
++            tier: Some(3),
++            host_tools: Some(true),
++            std: Some(true),
++        },
++        pointer_width: 64,
++        data_layout:
++            "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128".into(),
++        arch: "x86_64".into(),
++        options: base,
++    }
++}
+diff --git a/src/bootstrap/src/core/build_steps/compile.rs b/src/bootstrap/src/core/build_steps/compile.rs
+index 8e088682f92..40369508224 100644
+--- a/src/bootstrap/src/core/build_steps/compile.rs
++++ b/src/bootstrap/src/core/build_steps/compile.rs
+@@ -358,7 +358,7 @@ fn copy_self_contained_objects(
+     // to using gcc from a glibc-targeting toolchain for linking.
+     // To do that we have to distribute musl startup objects as a part of Rust toolchain
+     // and link with them manually in the self-contained mode.
+-    if target.contains("musl") && !target.contains("unikraft") {
++    if target.contains("musl") && !target.contains("unikraft") && !target.contains("phiban") {
+         let srcdir = builder.musl_libdir(target).unwrap_or_else(|| {
+             panic!("Target {:?} does not have a \"musl-libdir\" key", target.triple)
+         });
+@@ -548,7 +548,7 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
+ 
+         // Help the libc crate compile by assisting it in finding various
+         // sysroot native libraries.
+-        if target.contains("musl") {
++        if target.contains("musl") && !target.contains("phiban") {
+             if let Some(p) = builder.musl_libdir(target) {
+                 let root = format!("native={}", p.to_str().unwrap());
+                 cargo.rustflag("-L").rustflag(&root);
+diff --git a/src/bootstrap/src/core/build_steps/llvm.rs b/src/bootstrap/src/core/build_steps/llvm.rs
+index ffb7d9a9e0e..5355c0fe22f 100644
+--- a/src/bootstrap/src/core/build_steps/llvm.rs
++++ b/src/bootstrap/src/core/build_steps/llvm.rs
+@@ -1259,7 +1259,7 @@ fn supported_sanitizers(
+         "x86_64-unknown-linux-gnu" => {
+             common_libs("linux", "x86_64", &["asan", "dfsan", "lsan", "msan", "safestack", "tsan"])
+         }
+-        "x86_64-unknown-linux-musl" => {
++        "x86_64-unknown-linux-musl" | "x86_64-phiban-linux-musl" => {
+             common_libs("linux", "x86_64", &["asan", "lsan", "msan", "tsan"])
+         }
+         "s390x-unknown-linux-gnu" => {
+@@ -1456,7 +1456,7 @@ fn run(self, builder: &Builder<'_>) -> Self::Output {
+             cpp_cfg.flag("-std=c++11");
+         }
+ 
+-        if self.target.contains("x86_64-fortanix-unknown-sgx") || self.target.contains("musl") {
++        if self.target.contains("x86_64-fortanix-unknown-sgx") || self.target.contains("musl") && !self.target.contains("phiban") {
+             // use the same GCC C compiler command to compile C++ code so we do not need to setup the
+             // C++ compiler env variables on the builders.
+             // Don't set this for clang++, as clang++ is able to compile this without libc++.
+diff --git a/src/bootstrap/src/core/sanity.rs b/src/bootstrap/src/core/sanity.rs
+index fabb4f2b13b..6a5d0295054 100644
+--- a/src/bootstrap/src/core/sanity.rs
++++ b/src/bootstrap/src/core/sanity.rs
+@@ -327,7 +327,7 @@ pub fn check(build: &mut Build) {
+         }
+ 
+         // Make sure musl-root is valid.
+-        if target.contains("musl") && !target.contains("unikraft") {
++        if target.contains("musl") && !target.contains("unikraft") && !target.contains("phiban") {
+             // If this is a native target (host is also musl) and no musl-root is given,
+             // fall back to the system toolchain in /usr before giving up
+             if build.musl_root(*target).is_none() && build.config.build == *target {
+diff --git a/src/bootstrap/src/utils/cc_detect.rs b/src/bootstrap/src/utils/cc_detect.rs
+index 0df00469452..1a3ca036e74 100644
+--- a/src/bootstrap/src/utils/cc_detect.rs
++++ b/src/bootstrap/src/utils/cc_detect.rs
+@@ -78,7 +78,7 @@ fn new_cc_build(build: &Build, target: TargetSelection) -> cc::Build {
+             if target.is_msvc() {
+                 cfg.static_crt(true);
+             }
+-            if target.contains("musl") {
++            if target.contains("musl") && !target.contains("phiban") {
+                 cfg.static_flag(true);
+             }
+         }
+@@ -225,7 +225,7 @@ fn default_compiler(
+             }
+         }
+ 
+-        t if t.contains("musl") && compiler == Language::C => {
++        t if t.contains("musl") && !target.contains("phiban") && compiler == Language::C => {
+             if let Some(root) = build.musl_root(target) {
+                 let guess = root.join("bin/musl-gcc");
+                 if guess.exists() { Some(guess) } else { None }

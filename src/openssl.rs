@@ -6,7 +6,6 @@ use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo("/git_sources/openssl", "openssl-3.4.0-tarball")?;
-
     let source_dir = Path::new("/phiban/sources/openssl");
     env::set_current_dir(source_dir)?;
 

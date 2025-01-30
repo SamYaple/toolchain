@@ -45,11 +45,11 @@ ENV CCACHE_HASHDIR=yes
 RUN --mount=type=cache,target=/var/cache/apt,id=apt \
     apt-get install --no-install-recommends -y \
         gcc \
-	g++ \
-	libc6-dev \
-	cmake \
-	python3 \
-	ninja-build
+        g++ \
+        libc6-dev \
+        cmake \
+        python3 \
+        ninja-build
 
 # The cmake file `llvm.cmake` is commented for further reading.
 WORKDIR /git_sources/llvm-project
@@ -197,6 +197,18 @@ RUN patch -p1 < /patches/zlib/hack-fix-failed-shared-build.patch \
     && make install \
     && rm -fv ${PHASE0_SYSROOT}/usr/lib/libz.a
 
+# We need a shell. It is not optional if we want to keep building in a container
+WORKDIR /sources/bash
+COPY patches/bash /patches/bash
+RUN patch -p1 < /patches/bash/fix-missing-header.patch \
+    && ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --without-bash-malloc \
+    && make -j64 \
+    && make install
+
 # perl wants system bzip2
 WORKDIR /sources/bzip2
 RUN sed -i -e 's@CC=gcc@CC=clang@' -e 's@\(ln -s -f \)$(PREFIX)/bin/@\1@' Makefile* \
@@ -259,6 +271,71 @@ RUN CC=cc CXX=cxx ${PHASE0_SYSROOT}/usr/bin/perl ./Configure \
     && make -j64 \
     && make install_sw
 
+WORKDIR /git_sources/libffi
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/ncurses
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --with-shared \
+        --without-debug \
+        --without-normal \
+        --with-cxx-shared \
+        --enable-pc-files \
+        --with-pkg-config-libdir=${PHASE0_SYSROOT}/usr/lib/pkgconfig \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/readline
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --disable-static \
+        --with-ncurses \
+    && make SHLIB_LIBS='-lncursesw' -j64 \
+    && make install
+
+WORKDIR /git_sources/sqlite
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --disable-static \
+        --enable-fts4 \
+        --enable-fts5 \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/shadow
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+        --disable-static \
+        --without-libbsd \
+        --without-group-name-max-length \
+        --without-tcp \
+        --with-bcrypt \
+        --with-yescrypt \
+    && make -j64 \
+    && make install
+
+WORKDIR /git_sources/util-linux
+RUN ./configure \
+        --prefix=${PHASE0_SYSROOT}/usr \
+        --build=${TRIPLE} \
+        --host=${TRIPLE} \
+    && make -j64 \
+    && make install
+
 # rust bootstrap uses python
 WORKDIR /sources/python
 RUN ./configure \
@@ -282,91 +359,6 @@ RUN cmake -B build \
           -D BUILD_TESTING=OFF \
     && cmake --build build --parallel 64 \
     && cmake --build build --target install
-
-# the stage0 rust compiler is linked against `libgcc_s` which we do not have.
-# We can build a compat layer manually. We remove this after bootstrapping rust.
-# Similarly, the /etc/ld-musl-x86_64.path and /lib/ld-musl-x86_64.so.1 paths are
-# needed for the binary to find libc and other libs.
-WORKDIR /git_sources/llvm-project/llvm-libgcc
-RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
-    && clang --sysroot=${PHASE0_SYSROOT} -nostdlib \
-        -Wl,--version-script,gcc_s.ver \
-        -Wl,--whole-archive \
-        ${PHASE0_SYSROOT}/usr/lib/clang/19/lib/${TRIPLE}/libclang_rt.builtins.a \
-        ${PHASE0_SYSROOT}/usr/lib/libunwind.a \
-        -Wl,-soname,libgcc_s.so.1.0 \
-        -lc -shared -o libgcc_s.so.1.0 \
-    && install -m 0644 ./libgcc_s.so.1.0 ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
-    && ln -sv libgcc_s.so.1.0 ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1 \
-    && ln -sv libgcc_s.so.1   ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so \
-    && ln -sv ${PHASE0_SYSROOT}/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 \
-    && ln -sv ${PHASE0_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
-
-# FIXME: curl gets installed for the inital rustc bootstrap
-# TODO: cache these deps so rust bootstrap doesnt need curl
-RUN --mount=type=cache,target=/var/cache/apt,id=apt \
-    apt-get install -y curl
-
-ENV CARGO_HOME=/cargo
-
-WORKDIR /git_sources/rust
-COPY x86_64-phiban-linux-musl .
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
-    export BOOTSTRAP_SKIP_TARGET_SANITY=1 OPENSSL_DIR=${PHASE0_SYSROOT}/usr \
-    && ./configure \
-        --set=build.bootstrap-cache-path=/rustbootstrapdeps \
-        --set=build.jobs=64 \
-        --set=build.docs=false \
-        --set=build.host=${TRIPLE} \
-        --set=build.build=x86_64-unknown-linux-musl \
-        --set=build.target=${TRIPLE} \
-        --set=install.prefix=${PHASE0_SYSROOT}/usr \
-        --set=install.sysconfdir=etc \
-        --set=llvm.use-libcxx=true \
-        --set=rust.llvm-libunwind=system \
-        --set=rust.musl-root=${PHASE0_SYSROOT}/usr \
-        --set=target.${TRIPLE}.llvm-config=${PHASE0_SYSROOT}/usr/bin/llvm-config \
-        --set=target.x86_64-unknown-linux-musl.crt-static=false \
-        --set=target.x86_64-unknown-linux-musl.llvm-config=${PHASE0_SYSROOT}/usr/bin/llvm-config \
-    && ./x.py build -j64 \
-    && ./x.py install
-
-# HACK: Cleanup all our hacked in files. Everything should be linked correctly
-#       against libunwind and `/toolchain` now. `libgcc_s` and `curl` are no
-#       longer needed.
-RUN apt-get autoremove --purge -y curl
-RUN rm -v ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
-          ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1 \
-          ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so \
-          /lib/ld-musl-x86_64.so.1 \
-          /etc/ld-musl-x86_64.path
-
-# cargo still needs ssl certs to continue... stealing them from curl image
-COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
-
-# TODO: show patched sccache which allows sysroots. TooHard or TooEasy...
-WORKDIR /git_sources/sccache
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features native-zlib
-
-ENV RUSTC_WRAPPER=sccache
-ENV SCCACHE_DIR=/sccache
-
-WORKDIR /git_sources/diffutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
-
-WORKDIR /git_sources/findutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
-
-WORKDIR /git_sources/coreutils
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features unix
 
 WORKDIR /git_sources/gettext
 RUN ./configure \
@@ -425,17 +417,96 @@ RUN ./configure \
     && make -j64 \
     && make install
 
-# We need a shell. It is not optional if we want to keep building in a container
-WORKDIR /sources/bash
-COPY patches/bash /patches/bash
-RUN patch -p1 < /patches/bash/fix-missing-header.patch && \
-    ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-        --without-bash-malloc \
-    && make -j64 \
-    && make install
+# the stage0 rust compiler is linked against `libgcc_s` which we do not have.
+# We can build a compat layer manually. We remove this after bootstrapping rust.
+# Similarly, the /etc/ld-musl-x86_64.path and /lib/ld-musl-x86_64.so.1 paths are
+# needed for the binary to find libc and other libs.
+WORKDIR /git_sources/llvm-project/llvm-libgcc
+RUN clang -E -xc gcc_s.ver.in -o gcc_s.ver \
+    && clang --sysroot=${PHASE0_SYSROOT} -nostdlib \
+        -Wl,--version-script,gcc_s.ver \
+        -Wl,--whole-archive \
+        ${PHASE0_SYSROOT}/usr/lib/clang/19/lib/${TRIPLE}/libclang_rt.builtins.a \
+        ${PHASE0_SYSROOT}/usr/lib/libunwind.a \
+        -Wl,-soname,libgcc_s.so.1.0 \
+        -lc -shared -o libgcc_s.so.1.0 \
+    && install -m 0644 ./libgcc_s.so.1.0 ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
+    && ln -sv libgcc_s.so.1.0 ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1 \
+    && ln -sv libgcc_s.so.1   ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so \
+    && ln -sv ${PHASE0_SYSROOT}/lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1 \
+    && ln -sv ${PHASE0_SYSROOT}/etc/ld-musl-x86_64.path /etc/ld-musl-x86_64.path
+
+# FIXME: curl gets installed for the inital rustc bootstrap
+# TODO: cache these deps so rust bootstrap doesnt need curl
+RUN --mount=type=cache,target=/var/cache/apt,id=apt \
+    apt-get install -y curl sccache
+
+ENV CARGO_HOME=/cargo
+ENV RUSTC_WRAPPER=sccache
+ENV SCCACHE_DIR=/sccache
+
+WORKDIR /git_sources/rust
+COPY patches/rust/add-phiban-linux-musl-target.patch /
+COPY x86_64-phiban-linux-musl .
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    --mount=type=cache,target=/rustbootstrapdeps,id=rust-bootstrap-cache \
+    git apply /add-phiban-linux-musl-target.patch \
+    && export BOOTSTRAP_SKIP_TARGET_SANITY=1 OPENSSL_DIR=${PHASE0_SYSROOT}/usr \
+    && ./configure \
+        --set=build.bootstrap-cache-path=/rustbootstrapdeps \
+        --set=build.jobs=64 \
+        --set=build.docs=false \
+        --set=build.host=${TRIPLE} \
+        --set=build.build=x86_64-unknown-linux-musl \
+        --set=build.target=${TRIPLE} \
+        --set=install.prefix=${PHASE0_SYSROOT}/usr \
+        --set=install.sysconfdir=etc \
+        --set=llvm.use-libcxx=true \
+        --set=rust.llvm-libunwind=system \
+        --set=rust.musl-root=${PHASE0_SYSROOT}/usr \
+        --set=target.${TRIPLE}.llvm-config=${PHASE0_SYSROOT}/usr/bin/llvm-config \
+        --set=target.x86_64-unknown-linux-musl.crt-static=false \
+        --set=target.x86_64-unknown-linux-musl.llvm-config=${PHASE0_SYSROOT}/usr/bin/llvm-config \
+    && ./x.py build -j64 \
+    && ./x.py install
+
+# HACK: Cleanup all our hacked in files. Everything should be linked correctly
+#       against libunwind and `/toolchain` now. `libgcc_s` and `curl` are no
+#       longer needed.
+RUN apt-get autoremove --purge -y curl
+RUN rm -v ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1.0 \
+          ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so.1 \
+          ${PHASE0_SYSROOT}/usr/lib/libgcc_s.so \
+          /lib/ld-musl-x86_64.so.1 \
+          /etc/ld-musl-x86_64.path
+
+# cargo still needs ssl certs to continue... stealing them from curl image
+COPY --from=docker.io/curlimages/curl:latest /etc/ssl /etc/ssl
+
+# TODO: show patched sccache which allows sysroots. TooHard or TooEasy...
+WORKDIR /git_sources/sccache
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features native-zlib
+
+RUN apt-get autoremove --purge -y sccache
+
+WORKDIR /git_sources/diffutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
+WORKDIR /git_sources/findutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
+WORKDIR /git_sources/coreutils
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./ --features unix
+
 
 # Setup symlinks to ALL THE THINGS (or some of them... honestly there are a lot)
 WORKDIR ${PHASE0_SYSROOT}/usr/bin
@@ -443,7 +514,9 @@ RUN ln -sv bash sh \
     && ln -sv diffutils cmp \
     && ln -sv coreutils basename \
     && ln -sv coreutils cat \
+    && ln -sv coreutils chgrp \
     && ln -sv coreutils chmod \
+    && ln -sv coreutils chown \
     && ln -sv coreutils comm \
     && ln -sv coreutils cp \
     && ln -sv coreutils cut \
@@ -458,6 +531,7 @@ RUN ln -sv bash sh \
     && ln -sv coreutils mkdir \
     && ln -sv coreutils mv \
     && ln -sv coreutils pwd \
+    && ln -sv coreutils readlink \
     && ln -sv coreutils rm \
     && ln -sv coreutils rmdir \
     && ln -sv coreutils sleep \
@@ -473,15 +547,32 @@ RUN ln -sv bash sh \
     && ln -sv coreutils uniq \
     && ln -sv coreutils wc
 
-WORKDIR /git_sources/libffi
-RUN ./configure \
-        --prefix=${PHASE0_SYSROOT}/usr \
-        --build=${TRIPLE} \
-        --host=${TRIPLE} \
-    && make -j64 \
-    && make install
+RUN echo '#!/bin/sh' > ${PHASE0_SYSROOT}/usr/bin/ldconfig \
+    && chmod +x ${PHASE0_SYSROOT}/usr/bin/ldconfig \
+    && echo 'root:x:0:0:root:/root:/bin/bash' > ${PHASE0_SYSROOT}/etc/passwd \
+    && echo 'root:x:0:' > ${PHASE0_SYSROOT}/etc/group \
+    && echo 'bin:x:1:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'sys:x:2:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'kmem:x:3:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'tty:x:4:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'tape:x:5:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'daemon:x:6:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'floppy:x:7:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'disk:x:8:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'lp:x:9:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'dialout:x:10:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'audio:x:11:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'video:x:12:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'utmp:x:13:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'usb:x:14:' >> ${PHASE0_SYSROOT}/etc/group \
+    && echo 'cdrom:x:15:' >> ${PHASE0_SYSROOT}/etc/group
 
 WORKDIR /git_sources/git-warp-time
+RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
+    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
+    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+
+WORKDIR /git_sources/gtt
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
     cargo install --root ${PHASE0_SYSROOT}/usr --path ./

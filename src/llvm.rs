@@ -7,7 +7,6 @@ use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
     //clone_repo("/git_sources/llvm-project", "llvmorg-19.1.7")?;
-
     //let source_dir = Path::new("/phiban/sources/llvm-project");
     let source_dir = Path::new("/git_sources/llvm-project");
     env::set_current_dir(source_dir)?;
@@ -140,6 +139,7 @@ set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "")
 set(CMAKE_BUILD_TYPE "Release"           CACHE STRING "")
 #set(CMAKE_CXX_FLAGS  "-O3 -march=native" CACHE STRING "")
 #set(CMAKE_C_FLAGS    "-O3 -march=native" CACHE STRING "")
+#set(LLVM_LINK_LLVM_DYLIB ON CACHE BOOL "")
 
 # LTO
 #set(LLVM_BUILD_LTO "Thin" CACHE BOOL "")
@@ -154,16 +154,11 @@ set(CLANG_DEFAULT_LINKER     "lld"         CACHE STRING "")
 set(CLANG_DEFAULT_RTLIB      "compiler-rt" CACHE STRING "")
 set(CLANG_DEFAULT_UNWINDLIB  "libunwind"   CACHE STRING "")
 
-# Using this library for all the shared code between tools can greatly reduce
-# the size of the final toolchain.
-#set(LLVM_LINK_LLVM_DYLIB ON CACHE BOOL "")
-set(LLVM_INSTALL_UTILS   ON CACHE BOOL "")
-set(LLVM_USE_RELATIVE_PATHS_IN_FILES ON CACHE BOOL "")
-
 # Setup symlinks `cc`, `c++`, `ar`, `nm` to match binutils and historical defaults
 set(LLVM_INSTALL_BINUTILS_SYMLINKS ON CACHE BOOL "")
 set(LLVM_INSTALL_CCTOOLS_SYMLINKS  ON CACHE BOOL "")
 set(LLVM_USE_SYMLINKS              ON CACHE BOOL "")
+set(LLVM_INSTALL_UTILS   ON CACHE BOOL "")
 
 # Configure all of our builtins and runtimes link to each other ♥
 set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")

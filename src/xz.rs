@@ -6,10 +6,10 @@ use anyhow::Result;
 use crate::clone_repo;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/xz", "v5.6.4-tarball")?;
-    //let source_dir = Path::new("/phiban/sources/xz");
-    let source_dir = Path::new("/git_sources/xz");
+    clone_repo("/git_sources/xz", "v5.6.4-tarball")?;
+    let source_dir = Path::new("/phiban/sources/xz");
     set_current_dir(source_dir)?;
+    cmd!{"git-warp-time"};
 
     cmd!{"./configure --prefix={0}/usr --build={1} --host={1} --disable-static", sysroot, crate::TRIPLE};
     cmd!{"make -j64"};
