@@ -1,53 +1,58 @@
-use std::env;
-use std::fs::{write, remove_file};
-use crate::cmd;
-use std::path::Path;
-use anyhow::Result;
 use crate::clone_repo;
+use crate::cmd;
+use anyhow::Result;
+use std::fs::write;
+
+pub const SOURCE_DIR: &'static str = "/phiban/sources/llvm-project";
+pub const SOURCE_URL: &'static str = "file:///git_sources/llvm-project";
+// To see the different commits between rust llvm and the original llvm, run:
+//
+//   $ git --no-pager log llvmorg-19.1.7..rustc-1.84.0 --no-merges --pretty=oneline
+//   1268e87bdbaed0693a9d782ccd5a21e2cab2de33 (HEAD, tag: rustc-1.84.0) Revert "[ELF] Fix unnecessary inclusion of unreferenced provide symbols"
+//   c36e7699b1fd14e59400e06d894e2ca2c17ec23a Revert "[ELF] PROVIDE: fix spurious "symbol not found""
+//   29e82b2592450c43f7d0db2a18a7793c55c4957e [rust] Changes needed for 'x86_64-fortanix-unknown-sgx' nightly target.
+//pub const SOURCE_TAG: &'static str = "llvmorg-19.1.7";
+pub const SOURCE_TAG: &'static str = "rustc-1.84.0";
+pub const RESTORE_METADATA: bool = false;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/llvm-project", "llvmorg-19.1.7")?;
-    //let source_dir = Path::new("/phiban/sources/llvm-project");
-    let source_dir = Path::new("/git_sources/llvm-project");
-    env::set_current_dir(source_dir)?;
+    clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
 
-    //write("/phiban/llvm.cmake", LLVM_CMAKE)?;
+    write(&format! {"{SOURCE_DIR}/llvm.cmake"}, LLVM_CMAKE)?;
 
-    //cmd!{"git apply /patches/llvm-project/toolchain-prefix.patch"};
-    cmd!{"cmake -S llvm -B build -G Ninja
+    cmd! {"git apply /patches/llvm-project/disable-sanitizer-tests.patch"};
+    cmd! {"git apply /patches/llvm-project/toolchain-prefix.patch"};
+    cmd! {"cmake -S llvm -B build -G Ninja
         -D CMAKE_C_COMPILER_LAUNCHER=sccache
         -D CMAKE_CXX_COMPILER_LAUNCHER=sccache
         -D BUILD_SYSROOT={0}
         -D BUILD_TRIPLE={1}
         -D TARGET_SYSROOT={0}
         -D TARGET_TRIPLE={1}
-        -C /phiban/llvm.cmake", sysroot, crate::TRIPLE};
-    cmd!{"cmake --build build --target stage2-distribution"};
-    cmd!{"cmake --build build --target stage2-install-distribution"};
+        -C {2}/llvm.cmake", sysroot, crate::TRIPLE, SOURCE_DIR};
+    cmd! {"cmake --build build --target stage2-distribution"};
+    cmd! {"cmake --build build --target stage2-install-distribution"};
 
     Ok(())
 }
 
 pub fn build_and_install_runtimes(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/llvm-project", "llvmorg-19.1.7")?;
+    clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
 
-    //let source_dir = Path::new("/phiban/sources/llvm-project");
-    let source_dir = Path::new("/git_sources/llvm-project");
-    env::set_current_dir(source_dir)?;
+    write(&format! {"{SOURCE_DIR}/llvm.cmake"}, LLVM_CMAKE)?;
 
-    write("/phiban/llvm.cmake", LLVM_CMAKE)?;
-
-    cmd!{"git apply /patches/llvm-project/toolchain-prefix.patch"};
-    cmd!{"cmake -S llvm -B build -G Ninja
+    cmd! {"git apply /patches/llvm-project/disable-sanitizer-tests.patch"};
+    cmd! {"git apply /patches/llvm-project/toolchain-prefix.patch"};
+    cmd! {"cmake -S llvm -B build -G Ninja
         -D CMAKE_C_COMPILER_LAUNCHER=sccache
         -D CMAKE_CXX_COMPILER_LAUNCHER=sccache
         -D BUILD_SYSROOT=/toolchain
         -D BUILD_TRIPLE={1}
         -D TARGET_SYSROOT={0}
         -D TARGET_TRIPLE={1}
-        -C /phiban/llvm.cmake", sysroot, crate::TRIPLE};
-    cmd!{"cmake --build build --target runtimes"};
-    cmd!{"cmake --build build --target install-runtimes"};
+        -C {2}/llvm.cmake", sysroot, crate::TRIPLE, SOURCE_DIR};
+    cmd! {"cmake --build build --target runtimes"};
+    cmd! {"cmake --build build --target install-runtimes"};
 
     Ok(())
 }
@@ -129,6 +134,9 @@ if (STATIC_CORE)
     set(RUNTIMES_${TARGET_TRIPLE}_SANITIZER_USE_STATIC_CXX_ABI       ON CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_SANITIZER_USE_STATIC_LLVM_UNWINDER ON CACHE BOOL "")
     set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY ON CACHE BOOL "")
+
+    set(LLVM_USE_RELATIVE_PATHS_IN_FILES ON  CACHE BOOL "")
+    set(LLVM_ENABLE_ZLIB OFF CACHE BOOL "")
 endif()
 
 # Recommended option for build performance (why is it not default?)
@@ -139,14 +147,18 @@ set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "")
 set(CMAKE_BUILD_TYPE "Release"           CACHE STRING "")
 #set(CMAKE_CXX_FLAGS  "-O3 -march=native" CACHE STRING "")
 #set(CMAKE_C_FLAGS    "-O3 -march=native" CACHE STRING "")
-#set(LLVM_LINK_LLVM_DYLIB ON CACHE BOOL "")
+set(LLVM_PARALLEL_LINK_JOBS "16"         CACHE STRING "")
 
 # LTO
-#set(LLVM_BUILD_LTO "Thin" CACHE BOOL "")
+#set(LLVM_BUILD_LTO "Thin" CACHE STRING "")
 # PGO
-#set(LLVM_BUILD_INSTRUMENTED ON CACHE BOOL "")
+#set(LLVM_BUILD_INSTRUMENTED "IR"            CACHE STRING "")
+#set(LLVM_PROFILE_DATA_DIR   "/llvmprofdata" CACHE STRING "")
+#set(PGO_INSTRUMENT_LTO      "Thin"          CACHE STRING "")
+#set(PGO_BUILD_CONFIGURATION "/phiban/sources/llvm-project/llvm.cmake" CACHE STRING "")
 # Bolt
-#set(CLANG_BOLT ON CACHE BOOL "")
+#set(CLANG_BOLT "INSTRUMENT" CACHE STRING "")
+#set(CMAKE_EXE_LINKER_FLAGS "-Wl,--emit-relocs,-znow" CACHE STRING "")
 
 # Set compiler defaults
 set(CLANG_DEFAULT_CXX_STDLIB "libc++"      CACHE STRING "")
@@ -158,7 +170,12 @@ set(CLANG_DEFAULT_UNWINDLIB  "libunwind"   CACHE STRING "")
 set(LLVM_INSTALL_BINUTILS_SYMLINKS ON CACHE BOOL "")
 set(LLVM_INSTALL_CCTOOLS_SYMLINKS  ON CACHE BOOL "")
 set(LLVM_USE_SYMLINKS              ON CACHE BOOL "")
-set(LLVM_INSTALL_UTILS   ON CACHE BOOL "")
+set(LLVM_INSTALL_UTILS             ON CACHE BOOL "")
+
+# We build Rust with system LLVM and rustc will link against this.
+set(LLVM_LINK_LLVM_DYLIB      ON  CACHE BOOL "")
+set(LLVM_ENABLE_ZLIB          ON  CACHE BOOL "")
+set(LLVM_UNREACHABLE_OPTIMIZE OFF CACHE BOOL "")
 
 # Configure all of our builtins and runtimes link to each other ♥
 set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")
@@ -169,20 +186,19 @@ set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_USE_LLVM_UNWINDER      ON CACHE BOOL "")
 set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_USE_COMPILER_RT           ON CACHE BOOL "")
 set(RUNTIMES_${TARGET_TRIPLE}_LIBUNWIND_USE_COMPILER_RT        ON CACHE BOOL "")
 
-# Need to disable these for musl build (TODO: document the musl sanitizer limitations)
-set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_GWP_ASAN OFF CACHE BOOL "")
-set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_MEMPROF  OFF CACHE BOOL "")
-set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_ORC      OFF CACHE BOOL "")
+# # Need to disable these for musl build (TODO: document the musl sanitizer limitations)
+# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_GWP_ASAN OFF CACHE BOOL "")
+# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_MEMPROF  OFF CACHE BOOL "")
+# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_ORC      OFF CACHE BOOL "")
 
 # Disable what is called "multiarch" support. One sysroot, one target.
 set(COMPILER_RT_DEFAULT_TARGET_ONLY    ON  CACHE BOOL "")
 set(LLVM_ENABLE_PER_TARGET_RUNTIME_DIR OFF CACHE BOOL "")
-set(LLVM_USE_RELATIVE_PATHS_IN_FILES   ON  CACHE BOOL "")
 
-# Disable benchmarks; TODO revisit but it was causing build failures
-set(LLVM_BUILD_BENCHMARKS   OFF CACHE BOOL "")
-set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
-set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
+# # Disable benchmarks; TODO revisit but it was causing build failures
+# set(LLVM_BUILD_BENCHMARKS   OFF CACHE BOOL "")
+# set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
+# set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
 
 set(LLVM_ENABLE_RUNTIMES
     libunwind
@@ -194,78 +210,161 @@ set(LLVM_ENABLE_RUNTIMES
 set(LLVM_ENABLE_PROJECTS
     clang
     lld
+    bolt
     CACHE STRING "")
 
 set(LLVM_TARGETS_TO_BUILD
     X86
     CACHE STRING "")
 
-# https://releases.llvm.org/19.1.0/docs/CommandGuide/
-set(LLVM_TOOLCHAIN_TOOLS
-    # binutils alternatives
-    #llvm-addr2line
-    llvm-ar
-    #llvm-cxxfilt
-    llvm-nm
-    #llvm-objcopy
-    #llvm-objdump
-    llvm-ranlib
-    #llvm-readelf
-    #llvm-size
-    #llvm-strings
-    llvm-strip
+## # https://releases.llvm.org/19.1.0/docs/CommandGuide/
+## set(LLVM_TOOLCHAIN_TOOLS
+##     # binutils alternatives
+##     #llvm-addr2line
+##     llvm-ar
+##     #llvm-cxxfilt
+##     llvm-nm
+##     #llvm-objcopy
+##     #llvm-objdump
+##     llvm-ranlib
+##     #llvm-readelf
+##     #llvm-size
+##     #llvm-strings
+##     llvm-strip
+## 
+##     # symlink targets
+##     #addr2line
+##     ar
+##     #c++filt
+##     nm
+##     #objcopy
+##     #objdump
+##     ranlib
+##     #readelf
+##     #size
+##     #strings
+##     strip
+## 
+##     # build additional tools
+##     llvm-config # rust *needs* this
+##     #llvm-cov
+##     #llvm-dlltool
+##     #llvm-dwp
+##     #llvm-lib
+##     llvm-lto
+##     llvm-mca # rust *needs* this
+##     #llvm-ml
+##     #llvm-pdbutil
+##     #llvm-profdata
+##     #llvm-rc
+##     #llvm-readobj
+##     #llvm-symbolizer
+##     CACHE STRING "")
+## 
+## set(LLVM_TOOLCHAIN_UTILITIES
+##   FileCheck # rust *needs* this
+##   #obj2yaml
+##   #yaml2obj
+##   #not
+##   #count
+##   CACHE STRING "")
+## 
+## set(LLVM_DISTRIBUTION_COMPONENTS
+##   builtins
+##   runtimes
+## 
+##   clang-resource-headers
+##   clang-libraries
+## 
+##   llvm-headers
+##   llvm-libraries
+## 
+##   ${LLVM_TOOLCHAIN_TOOLS}
+##   ${LLVM_TOOLCHAIN_UTILITIES}
+##   ${LLVM_ENABLE_PROJECTS}
+##   CACHE STRING "")
 
-    # symlink targets
-    #addr2line
-    ar
-    #c++filt
-    nm
-    #objcopy
-    #objdump
-    ranlib
-    #readelf
-    #size
-    #strings
-    strip
+set(COMPILER_RT_SANITIZERS_TO_BUILD
+    # These compilers are not going to work on musl due to the need for glibc
+    # specific non-C standard functions that musl wont implement because it is
+    # out of scope for the musl project.
+    # This list is my best effort to sort these for use with musl and ensure the
+    # LLVM tests all pass properly.
 
-    # build additional tools
-    llvm-config # rust *needs* this
-    #llvm-cov
-    #llvm-dlltool
-    #llvm-dwp
-    #llvm-lib
-    llvm-lto
-    llvm-mca # rust *needs* this
-    #llvm-ml
-    #llvm-pdbutil
-    #llvm-profdata
-    #llvm-rc
-    #llvm-readobj
-    #llvm-symbolizer
+    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
+    #asan
+    #asan_abi
+    #dfsan
+    #gwp_asan
+    #hwasan # mainly for aarch64?
+    
+    # TODO: continue investigating these
+    #rtsan
+    #nsan
+    #rtsan
+    #safestack
+
+    # These all work on musl! Probably!
+    cfi
+    msan
+    tsan
+    ubsan_minimal
+    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
     CACHE STRING "")
+set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SANITIZERS_TO_BUILD
+    # These compilers are not going to work on musl due to the need for glibc
+    # specific non-C standard functions that musl wont implement because it is
+    # out of scope for the musl project.
+    # This list is my best effort to sort these for use with musl and ensure the
+    # LLVM tests all pass properly.
 
-set(LLVM_TOOLCHAIN_UTILITIES
-  FileCheck # rust *needs* this
-  #obj2yaml
-  #yaml2obj
-  #not
-  #count
-  CACHE STRING "")
+    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
+    #asan
+    #asan_abi
+    #dfsan
+    #gwp_asan
+    #hwasan # mainly for aarch64?
+    
+    # TODO: continue investigating these
+    #rtsan
+    #nsan
+    #rtsan
+    #safestack
 
-set(LLVM_DISTRIBUTION_COMPONENTS
-  builtins
-  runtimes
+    # These all work on musl! Probably!
+    cfi
+    msan
+    tsan
+    ubsan_minimal
+    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
+    CACHE STRING "")
+set(BUILTINS_${TARGET_TRIPLE}_COMPILER_RT_SANITIZERS_TO_BUILD
+    # These compilers are not going to work on musl due to the need for glibc
+    # specific non-C standard functions that musl wont implement because it is
+    # out of scope for the musl project.
+    # This list is my best effort to sort these for use with musl and ensure the
+    # LLVM tests all pass properly.
 
-  clang-resource-headers
-  clang-libraries
+    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
+    #asan
+    #asan_abi
+    #dfsan
+    #gwp_asan
+    #hwasan # mainly for aarch64?
+    
+    # TODO: continue investigating these
+    #rtsan
+    #nsan
+    #rtsan
+    #safestack
 
-  llvm-headers
-  llvm-libraries
-
-  ${LLVM_TOOLCHAIN_TOOLS}
-  ${LLVM_TOOLCHAIN_UTILITIES}
-  ${LLVM_ENABLE_PROJECTS}
-  CACHE STRING "")
+    # These all work on musl! Probably!
+    cfi
+    msan
+    tsan
+    ubsan_minimal
+    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
+    CACHE STRING "")
 
 # The clang bootstrap process works in two stages. `stage1` builds clang and
 # llvm, then uses those to build the builtins and runtimes. Only the runtimes
@@ -280,6 +379,6 @@ set(CLANG_BOOTSTRAP_CMAKE_ARGS
     -D BUILD_TRIPLE=${TARGET_TRIPLE}
     -D TARGET_SYSROOT=${TARGET_SYSROOT}
     -D TARGET_TRIPLE=${TARGET_TRIPLE}
-    -C /phiban/llvm.cmake
+    -C /phiban/sources/llvm-project/llvm.cmake
     CACHE STRING "")
 "#;

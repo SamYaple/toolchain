@@ -1,20 +1,19 @@
-use std::env;
-use std::fs::remove_file;
-use crate::cmd;
-use std::path::Path;
-use anyhow::Result;
 use crate::clone_repo;
+use crate::cmd;
+use anyhow::Result;
+
+pub const SOURCE_DIR: &'static str = "/phiban/sources/rust";
+pub const SOURCE_URL: &'static str = "file:///git_sources/rust";
+pub const SOURCE_TAG: &'static str = "1.84.0";
+pub const RESTORE_METADATA: bool = false;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    //clone_repo("/git_sources/rust", "1.84.0")?;
-    //let source_dir = Path::new("/phiban/sources/rust");
-    let source_dir = Path::new("/git_sources/rust");
-    env::set_current_dir(source_dir)?;
-    //cmd!{"git apply /patches/rust/change-git-submodule-paths.patch"};
-    //cmd!{"git submodule update --init --recursive"};
+    clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
+    cmd! {"git apply /patches/rust/change-git-submodule-paths.patch"};
+    cmd! {"git submodule update --init --recursive"};
 
-    cmd!{"git apply /patches/rust/add-phiban-linux-musl-target.patch"};
-    cmd!{"./configure
+    cmd! {"git apply /patches/rust/add-phiban-linux-musl-target.patch"};
+    cmd! {"./configure
         --set=build.cargo=/toolchain/usr/bin/cargo
         --set=build.cargo-clippy=/toolchain/usr/bin/cargo-clippy
         --set=build.rustc=/toolchain/usr/bin/rustc
@@ -29,10 +28,10 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
         --set=rust.llvm-libunwind=system
         --set=rust.musl-root={0}/usr
         --set=target.{1}.llvm-config={0}/usr/bin/llvm-config",
-        sysroot,
-        crate::TRIPLE};
-    cmd!{"python3 ./x.py build -j64"};
-    cmd!{"python3 ./x.py install"};
+    sysroot,
+    crate::TRIPLE};
+    cmd! {"python3 ./x.py build -j64"};
+    cmd! {"python3 ./x.py install"};
 
     Ok(())
 }

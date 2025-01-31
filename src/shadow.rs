@@ -1,19 +1,18 @@
-use std::os::unix::fs::symlink;
-use std::env;
-use crate::cmd;
-use std::path::Path;
-use anyhow::Result;
 use crate::clone_repo;
+use crate::cmd;
+use anyhow::Result;
+
+pub const SOURCE_DIR: &'static str = "/phiban/sources/shadow";
+pub const SOURCE_URL: &'static str = "file:///git_sources/shadow";
+pub const SOURCE_TAG: &'static str = "4.17.2-tarball+gtt";
+pub const RESTORE_METADATA: bool = true;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
-    clone_repo("/git_sources/shadow", "4.17.2-tarball+gtt")?;
-    let source_dir = Path::new("/phiban/sources/shadow");
-    env::set_current_dir(source_dir)?;
-    cmd!{"gtt restore"};
+    clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
 
-    cmd!{"./configure --prefix={0}/usr --build={1} --host={1} --disable-static --without-libbsd --without-group-name-max-length --without-tcb --with-bcrypt --with-yescrypt", sysroot, crate::TRIPLE};
-    cmd!{"make -j64"};
-    cmd!{"make install"};
+    cmd! {"./configure --prefix={0}/usr --build={1} --host={1} --disable-static --without-libbsd --without-group-name-max-length --without-tcb --with-bcrypt --with-yescrypt", sysroot, crate::TRIPLE};
+    cmd! {"make -j64"};
+    cmd! {"make install"};
 
     Ok(())
 }
