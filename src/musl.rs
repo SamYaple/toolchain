@@ -16,7 +16,7 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
     cmd! {"make -j64"};
     cmd! {"make install"};
 
-    let ldd_path = &format! {"{sysroot}/usr/lib/ldd"};
+    let ldd_path = &format! {"{sysroot}/usr/bin/ldd"};
     symlink("../lib/libc.so", ldd_path)?;
 
     let lib_path = &format! {"{sysroot}/usr/lib/ld-musl-x86_64.so.1"};

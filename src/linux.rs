@@ -7,7 +7,7 @@ pub const SOURCE_URL: &'static str = "file:///git_sources/linux";
 pub const SOURCE_TAG: &'static str = "v6.13";
 pub const RESTORE_METADATA: bool = false;
 
-pub fn build_and_install(sysroot: &str) -> Result<()> {
+pub fn build_and_install_headers(sysroot: &str) -> Result<()> {
     clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
 
     // TODO: Does this actually generate headers? or just copy them?

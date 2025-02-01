@@ -3,7 +3,7 @@ macro_rules! cmd {
     ($fmt:literal $(, $($args:expr),*)? ) => {{
         // Replace format brackets with values in scope of the caller
         let formatted_cmd = format!($fmt $(, $($args),*)?);
-        println!("PHIBAN TODO -- replace process spawn: {}", formatted_cmd);
+        println!("PHIBAN spawn: {}", formatted_cmd);
 
         let mut iter = formatted_cmd.split_whitespace();
         let program = iter.next().expect("No first item?");

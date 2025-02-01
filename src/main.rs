@@ -4,7 +4,7 @@ mod bzip2;
 mod cmake;
 mod gdbm;
 mod libffi;
-mod linux_headers;
+mod linux;
 mod llvm;
 mod make;
 mod mpdecimal;
@@ -20,12 +20,13 @@ mod sqlite;
 mod util_linux;
 mod xz;
 mod zlib;
-//mod ninja;
+mod bash;
+mod ninja;
 //mod perl;
 
 use anyhow::Result;
 use std::env::{remove_var, set_current_dir, set_var};
-use std::fs::create_dir;
+use std::fs::{remove_file, create_dir};
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
@@ -38,6 +39,7 @@ fn clone_repo(
     repo_tag: &str,
     restore_metadata: bool,
 ) -> Result<()> {
+    println!("Cloning from {repo_url} into {dest_dir}");
     if !Path::new(dest_dir).exists() {
         cmd! {"git clone {} {}", repo_url, dest_dir};
     }
@@ -77,39 +79,56 @@ fn init_fs_tree(sysroot: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let sysroot = "/sysroots/phase1";
     unsafe {
-        set_var("PATH", format! {"{sysroot}/usr/bin:/toolchain/usr/bin"});
+        set_var("PATH", format! {"/toolchain/usr/bin"});
+        set_var("CFLAGS", "--sysroot=/toolchain");
+        set_var("CXXFLAGS", "--sysroot=/toolchain");
+        set_var("LDFLAGS", "--sysroot=/toolchain");
     }
+
+    let sysroot = "/sysroots/phase1";
 
     // initial fs structure, headers, libc, libunwind, libc++, but no tooling
     init_fs_tree(sysroot)?;
-    linux_headers::build_and_install(sysroot)?;
+    linux::build_and_install_headers(sysroot)?;
     musl::build_and_install(sysroot)?;
     llvm::build_and_install_runtimes(sysroot)?;
 
+    // with all the core libraries setup, we can now build the rest of the
+    // system in our new sysroot!
     unsafe {
         set_var("CFLAGS", format! {"--sysroot={sysroot}"});
         set_var("CXXFLAGS", format! {"--sysroot={sysroot}"});
         set_var("LDFLAGS", format! {"--sysroot={sysroot}"});
     }
-    make::build_and_install(sysroot)?;
+
+    // NOTE: Does pkgconf need to get installed this early? probably not.
     pkgconf::build_and_install(sysroot)?;
-    libffi::build_and_install(sysroot)?;
 
     zlib::build_and_install(sysroot)?;
     bzip2::build_and_install(sysroot)?;
     xz::build_and_install(sysroot)?;
-
-    //perl::build_and_install(sysroot)?;
     openssl::build_and_install(sysroot)?;
-
     ncurses::build_and_install(sysroot)?;
     readline::build_and_install(sysroot)?;
+    libffi::build_and_install(sysroot)?;
     gdbm::build_and_install(sysroot)?;
     sqlite::build_and_install(sysroot)?;
     mpdecimal::build_and_install(sysroot)?;
-    shadow::build_and_install(sysroot)?;
+
+    // We can now swap our linker to use all the newly built libraries and tools
+    remove_file("/toolchain")?;
+    symlink(sysroot, "/toolchain")?;
+    unsafe {
+        set_var("PATH", format! {"/toolchain/usr/bin:/sysroots/phase0/usr/bin"});
+        set_var("CFLAGS", "--sysroot=/toolchain");
+        set_var("CXXFLAGS", "--sysroot=/toolchain");
+        set_var("LDFLAGS", "--sysroot=/toolchain");
+    }
+
+    make::build_and_install(sysroot)?;
+    bash::build_and_install(sysroot)?;
+    //perl::build_and_install(sysroot)?;
 
     // HACK: circular dependency solved by building python twice
     //
@@ -117,11 +136,12 @@ fn main() -> Result<()> {
     //   - python wants libuuid (from util-linux)
     python::build_and_install(sysroot)?;
 
+    shadow::build_and_install(sysroot)?;
     util_linux::build_and_install(sysroot)?;
     python::build_and_install(sysroot)?;
 
     cmake::build_and_install(sysroot)?;
-    //ninja::build_and_install(sysroot)?;
+    ninja::build_and_install(sysroot)?;
 
     llvm::build_and_install(sysroot)?;
     rust::build_and_install(sysroot)?;
@@ -130,6 +150,7 @@ fn main() -> Result<()> {
         remove_var("CFLAGS");
         remove_var("CXXFLAGS");
         remove_var("LDFLAGS");
+        set_var("PATH","/toolchain/usr/bin");
     }
 
     Ok(())

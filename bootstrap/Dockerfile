@@ -575,7 +575,7 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
 WORKDIR /git_sources/gtt
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
-    cargo install --root ${PHASE0_SYSROOT}/usr --path ./
+    cargo install --root ${PHASE0_SYSROOT}/usr --path .
 
 # When building with Docker/Podman the `RUN` statements are executed with
 # `/bin/sh -c 'somecommand -with args'`. We need a symlink setup in the root
@@ -599,3 +599,10 @@ COPY --from=phase0 /compat/hack/ /
 COPY --from=phase0 /compat/bin /bin
 COPY --from=phase0 /compat/tmp /tmp
 ENV PATH="/toolchain/usr/bin"
+
+# TODO: Remove the protocol allow once mirror is setup
+RUN mkdir /root \
+    && export HOME=/root \
+    && git config --global init.defaultBranch main \
+    && git config --global advice.detachedHead false \
+    && git config --global protocol.file.allow always

@@ -1,0 +1,12 @@
+diff --git a/lib/termcap/tparam.c b/lib/termcap/tparam.c
+index c4bff088..97ad6d35 100644
+--- a/lib/termcap/tparam.c
++++ b/lib/termcap/tparam.c
+@@ -54,6 +54,7 @@ char *realloc ();
+ 
+ #endif /* not HAVE_CONFIG_H */
+ 
++#include <unistd.h>
+ #include "ltcap.h"
+ 
+ #ifndef NULL

@@ -1,0 +1,16 @@
+diff --git a/include/curses.h.in b/include/curses.h.in
+index 8cfa0b9f..9419f28e 100644
+--- a/include/curses.h.in
++++ b/include/curses.h.in
+@@ -253,11 +253,7 @@ typedef @cf_cv_typeof_mmask_t@ mmask_t;
+  * indicate that it should be defined.
+  */
+ #ifndef NCURSES_WIDECHAR
+-#if defined(_XOPEN_SOURCE_EXTENDED) || (defined(_XOPEN_SOURCE) && (_XOPEN_SOURCE - 0 >= 500))
+ #define NCURSES_WIDECHAR 1
+-#else
+-#define NCURSES_WIDECHAR 0
+-#endif
+ #endif /* NCURSES_WIDECHAR */
+ 
+ #include <stdarg.h>	/* we need va_list */

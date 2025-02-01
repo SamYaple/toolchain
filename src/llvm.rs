@@ -30,8 +30,8 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
         -D TARGET_SYSROOT={0}
         -D TARGET_TRIPLE={1}
         -C {2}/llvm.cmake", sysroot, crate::TRIPLE, SOURCE_DIR};
-    cmd! {"cmake --build build --target stage2-distribution"};
-    cmd! {"cmake --build build --target stage2-install-distribution"};
+    cmd! {"cmake --build build --target stage2"};
+    cmd! {"cmake --build build --target stage2-install"};
 
     Ok(())
 }
@@ -39,23 +39,96 @@ pub fn build_and_install(sysroot: &str) -> Result<()> {
 pub fn build_and_install_runtimes(sysroot: &str) -> Result<()> {
     clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
 
-    write(&format! {"{SOURCE_DIR}/llvm.cmake"}, LLVM_CMAKE)?;
+    write(&format! {"{SOURCE_DIR}/llvm.cmake"}, LLVM_RUNTIMES_CMAKE)?;
 
     cmd! {"git apply /patches/llvm-project/disable-sanitizer-tests.patch"};
     cmd! {"git apply /patches/llvm-project/toolchain-prefix.patch"};
-    cmd! {"cmake -S llvm -B build -G Ninja
+    cmd! {"cmake -S runtimes -B build -G Ninja
         -D CMAKE_C_COMPILER_LAUNCHER=sccache
         -D CMAKE_CXX_COMPILER_LAUNCHER=sccache
-        -D BUILD_SYSROOT=/toolchain
+        -D BUILD_SYSROOT={0}
         -D BUILD_TRIPLE={1}
         -D TARGET_SYSROOT={0}
         -D TARGET_TRIPLE={1}
         -C {2}/llvm.cmake", sysroot, crate::TRIPLE, SOURCE_DIR};
-    cmd! {"cmake --build build --target runtimes"};
-    cmd! {"cmake --build build --target install-runtimes"};
+    cmd! {"cmake --build build --target install"};
 
     Ok(())
 }
+
+const LLVM_RUNTIMES_CMAKE: &'static str = r#"
+set(LLVM_HOST_TRIPLE        ${TARGET_TRIPLE}      CACHE STRING "")
+set(CMAKE_C_COMPILER_TARGET ${TARGET_TRIPLE}      CACHE STRING "")
+set(CMAKE_INSTALL_PREFIX    ${TARGET_SYSROOT}/usr CACHE STRING "")
+#set(LLVM_BUILTIN_TARGETS ${TARGET_TRIPLE} CACHE STRING "")
+#set(LLVM_RUNTIME_TARGETS ${TARGET_TRIPLE} CACHE STRING "")
+
+set(LIBCXX_HAS_MUSL_LIBC ON CACHE BOOL "")
+
+# Recommended option for build performance (why is it not default?)
+# TODO: Maybe reuse the tablegen between stages?
+#set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "")
+set(LLVM_ENABLE_ZLIB          ON  CACHE BOOL "")
+set(LLVM_UNREACHABLE_OPTIMIZE OFF CACHE BOOL "")
+
+# gotta go fast
+set(CMAKE_BUILD_TYPE "Release"           CACHE STRING "")
+#set(CMAKE_CXX_FLAGS  "-O3 -march=native" CACHE STRING "")
+#set(CMAKE_C_FLAGS    "-O3 -march=native" CACHE STRING "")
+
+# Configure all of our builtins and runtimes link to each other ♥
+set(COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")
+set(COMPILER_RT_USE_LIBCXX           ON CACHE BOOL "")
+set(COMPILER_RT_USE_LLVM_UNWINDER    ON CACHE BOOL "")
+set(LIBCXXABI_USE_COMPILER_RT        ON CACHE BOOL "")
+set(LIBCXXABI_USE_LLVM_UNWINDER      ON CACHE BOOL "")
+set(LIBCXX_USE_COMPILER_RT           ON CACHE BOOL "")
+set(LIBUNWIND_USE_COMPILER_RT        ON CACHE BOOL "")
+
+# Disable what is called "multiarch" support. One sysroot, one target.
+set(COMPILER_RT_DEFAULT_TARGET_ONLY    ON  CACHE BOOL "")
+set(LLVM_ENABLE_PER_TARGET_RUNTIME_DIR OFF CACHE BOOL "")
+
+set(LLVM_ENABLE_RUNTIMES
+    libunwind
+    libcxxabi
+    libcxx
+    compiler-rt
+    CACHE STRING "")
+
+set(LLVM_TARGETS_TO_BUILD
+    X86
+    CACHE STRING "")
+
+
+set(COMPILER_RT_SANITIZERS_TO_BUILD
+    # These compilers are not going to work on musl due to the need for glibc
+    # specific non-C standard functions that musl wont implement because it is
+    # out of scope for the musl project.
+    # This list is my best effort to sort these for use with musl and ensure the
+    # LLVM tests all pass properly.
+
+    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
+    #asan
+    #asan_abi
+    #dfsan
+    #gwp_asan
+    #hwasan # mainly for aarch64?
+    
+    # TODO: continue investigating these
+    #rtsan
+    #nsan
+    #rtsan
+    #safestack
+
+    # These all work on musl! Probably!
+    cfi
+    msan
+    tsan
+    ubsan_minimal
+    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
+    CACHE STRING "")
+"#;
 
 const LLVM_CMAKE: &'static str = r#"
 # Added vars to control this build. Pass these to cmake to control the sysroots
@@ -186,19 +259,9 @@ set(RUNTIMES_${TARGET_TRIPLE}_LIBCXXABI_USE_LLVM_UNWINDER      ON CACHE BOOL "")
 set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_USE_COMPILER_RT           ON CACHE BOOL "")
 set(RUNTIMES_${TARGET_TRIPLE}_LIBUNWIND_USE_COMPILER_RT        ON CACHE BOOL "")
 
-# # Need to disable these for musl build (TODO: document the musl sanitizer limitations)
-# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_GWP_ASAN OFF CACHE BOOL "")
-# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_MEMPROF  OFF CACHE BOOL "")
-# set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_BUILD_ORC      OFF CACHE BOOL "")
-
 # Disable what is called "multiarch" support. One sysroot, one target.
 set(COMPILER_RT_DEFAULT_TARGET_ONLY    ON  CACHE BOOL "")
 set(LLVM_ENABLE_PER_TARGET_RUNTIME_DIR OFF CACHE BOOL "")
-
-# # Disable benchmarks; TODO revisit but it was causing build failures
-# set(LLVM_BUILD_BENCHMARKS   OFF CACHE BOOL "")
-# set(LLVM_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
-# set(RUNTIMES_${TARGET_TRIPLE}_LIBCXX_INCLUDE_BENCHMARKS OFF CACHE BOOL "")
 
 set(LLVM_ENABLE_RUNTIMES
     libunwind
@@ -217,128 +280,7 @@ set(LLVM_TARGETS_TO_BUILD
     X86
     CACHE STRING "")
 
-## # https://releases.llvm.org/19.1.0/docs/CommandGuide/
-## set(LLVM_TOOLCHAIN_TOOLS
-##     # binutils alternatives
-##     #llvm-addr2line
-##     llvm-ar
-##     #llvm-cxxfilt
-##     llvm-nm
-##     #llvm-objcopy
-##     #llvm-objdump
-##     llvm-ranlib
-##     #llvm-readelf
-##     #llvm-size
-##     #llvm-strings
-##     llvm-strip
-## 
-##     # symlink targets
-##     #addr2line
-##     ar
-##     #c++filt
-##     nm
-##     #objcopy
-##     #objdump
-##     ranlib
-##     #readelf
-##     #size
-##     #strings
-##     strip
-## 
-##     # build additional tools
-##     llvm-config # rust *needs* this
-##     #llvm-cov
-##     #llvm-dlltool
-##     #llvm-dwp
-##     #llvm-lib
-##     llvm-lto
-##     llvm-mca # rust *needs* this
-##     #llvm-ml
-##     #llvm-pdbutil
-##     #llvm-profdata
-##     #llvm-rc
-##     #llvm-readobj
-##     #llvm-symbolizer
-##     CACHE STRING "")
-## 
-## set(LLVM_TOOLCHAIN_UTILITIES
-##   FileCheck # rust *needs* this
-##   #obj2yaml
-##   #yaml2obj
-##   #not
-##   #count
-##   CACHE STRING "")
-## 
-## set(LLVM_DISTRIBUTION_COMPONENTS
-##   builtins
-##   runtimes
-## 
-##   clang-resource-headers
-##   clang-libraries
-## 
-##   llvm-headers
-##   llvm-libraries
-## 
-##   ${LLVM_TOOLCHAIN_TOOLS}
-##   ${LLVM_TOOLCHAIN_UTILITIES}
-##   ${LLVM_ENABLE_PROJECTS}
-##   CACHE STRING "")
-
-set(COMPILER_RT_SANITIZERS_TO_BUILD
-    # These compilers are not going to work on musl due to the need for glibc
-    # specific non-C standard functions that musl wont implement because it is
-    # out of scope for the musl project.
-    # This list is my best effort to sort these for use with musl and ensure the
-    # LLVM tests all pass properly.
-
-    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
-    #asan
-    #asan_abi
-    #dfsan
-    #gwp_asan
-    #hwasan # mainly for aarch64?
-    
-    # TODO: continue investigating these
-    #rtsan
-    #nsan
-    #rtsan
-    #safestack
-
-    # These all work on musl! Probably!
-    cfi
-    msan
-    tsan
-    ubsan_minimal
-    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
-    CACHE STRING "")
 set(RUNTIMES_${TARGET_TRIPLE}_COMPILER_RT_SANITIZERS_TO_BUILD
-    # These compilers are not going to work on musl due to the need for glibc
-    # specific non-C standard functions that musl wont implement because it is
-    # out of scope for the musl project.
-    # This list is my best effort to sort these for use with musl and ensure the
-    # LLVM tests all pass properly.
-
-    # requires glibc interceptors (to my knowledge as of llvmorg-19.1.7)
-    #asan
-    #asan_abi
-    #dfsan
-    #gwp_asan
-    #hwasan # mainly for aarch64?
-    
-    # TODO: continue investigating these
-    #rtsan
-    #nsan
-    #rtsan
-    #safestack
-
-    # These all work on musl! Probably!
-    cfi
-    msan
-    tsan
-    ubsan_minimal
-    #scudo_standalone # NOTE: This works, but I don't have a use for it currently
-    CACHE STRING "")
-set(BUILTINS_${TARGET_TRIPLE}_COMPILER_RT_SANITIZERS_TO_BUILD
     # These compilers are not going to work on musl due to the need for glibc
     # specific non-C standard functions that musl wont implement because it is
     # out of scope for the musl project.

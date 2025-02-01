@@ -9,15 +9,17 @@ pub const RESTORE_METADATA: bool = false;
 
 pub fn build_and_install(sysroot: &str) -> Result<()> {
     clone_repo(SOURCE_DIR, SOURCE_URL, SOURCE_TAG, RESTORE_METADATA)?;
+    // TODO: I dont like this and also its unneeded to clone `gcc` and
+    // `llvm-project` submodules since they go unused...
     cmd! {"git apply /patches/rust/change-git-submodule-paths.patch"};
     cmd! {"git submodule update --init --recursive"};
 
     cmd! {"git apply /patches/rust/add-phiban-linux-musl-target.patch"};
     cmd! {"./configure
-        --set=build.cargo=/toolchain/usr/bin/cargo
-        --set=build.cargo-clippy=/toolchain/usr/bin/cargo-clippy
-        --set=build.rustc=/toolchain/usr/bin/rustc
-        --set=build.rustfmt=/toolchain/usr/bin/rustfmt
+        --set=build.cargo=/sysroots/phase0/usr/bin/cargo
+        --set=build.cargo-clippy=/sysroots/phase0/usr/bin/cargo-clippy
+        --set=build.rustc=/sysroots/phase0/usr/bin/rustc
+        --set=build.rustfmt=/sysroots/phase0/usr/bin/rustfmt
         --set=build.jobs=64
         --set=build.host={1}
         --set=build.build={1}

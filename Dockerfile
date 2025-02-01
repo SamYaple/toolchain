@@ -10,28 +10,17 @@ ENV CARGO_HOME=/cargo
 ENV RUSTC_WRAPPER=sccache
 ENV SCCACHE_DIR=/sccache
 
-WORKDIR /git_sources/gtt
-RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
-    --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase0 \
-    cargo install --root /sysroots/phase0/usr --path ./
-
-# TODO: Remove the protocol allow once mirror is setup
-RUN mkdir /root \
-    && export HOME=/root \
-    && git config --global init.defaultBranch main \
-    && git config --global advice.detachedHead false \
-    && git config --global protocol.file.allow always
-
-# util-linux has a script expecting /bin/bash
+# TODO: util-linux has a script expecting /bin/bash
+# TODO: /etc/group and /etc/passwd  are not patched either
 RUN ln -sv sh /bin/bash \
-    && ln -sv /toolchain/etc/passwd /etc/passwd \
-    && ln -sv /toolchain/etc/group /etc/group \
+    && cp -av /toolchain/etc/passwd /etc/passwd \
+    && cp -av /toolchain/etc/group /etc/group \
     && echo /sysroots/phase1/usr/lib >>  /toolchain/etc/ld-musl-x86_64.path
-RUN mkdir -p /phiban/sources
+
+COPY patches /patches
 WORKDIR /phiban-bootstrap
 COPY Cargo.toml Cargo.toml
 COPY src src
-COPY patches /patches
 RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     --mount=type=cache,target=${SCCACHE_DIR},id=sccache-phase1 \
     --mount=type=cache,target=/phiban/sources,id=phiban-git-sources \
