@@ -73,8 +73,8 @@ set(LLVM_UNREACHABLE_OPTIMIZE OFF CACHE BOOL "")
 
 # gotta go fast
 set(CMAKE_BUILD_TYPE "Release"           CACHE STRING "")
-#set(CMAKE_CXX_FLAGS  "-O3 -march=native" CACHE STRING "")
-#set(CMAKE_C_FLAGS    "-O3 -march=native" CACHE STRING "")
+set(CMAKE_CXX_FLAGS  "-Oz -march=native" CACHE STRING "")
+set(CMAKE_C_FLAGS    "-Oz -march=native" CACHE STRING "")
 
 # Configure all of our builtins and runtimes link to each other ♥
 set(COMPILER_RT_USE_BUILTINS_LIBRARY ON CACHE BOOL "")
@@ -218,8 +218,8 @@ set(LLVM_OPTIMIZED_TABLEGEN ON CACHE BOOL "")
 
 # gotta go fast
 set(CMAKE_BUILD_TYPE "Release"           CACHE STRING "")
-#set(CMAKE_CXX_FLAGS  "-O3 -march=native" CACHE STRING "")
-#set(CMAKE_C_FLAGS    "-O3 -march=native" CACHE STRING "")
+set(CMAKE_CXX_FLAGS  "-Oz -march=native" CACHE STRING "")
+set(CMAKE_C_FLAGS    "-Oz -march=native" CACHE STRING "")
 set(LLVM_PARALLEL_LINK_JOBS "16"         CACHE STRING "")
 
 # LTO

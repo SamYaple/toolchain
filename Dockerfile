@@ -27,13 +27,11 @@ RUN --mount=type=cache,target=${CARGO_HOME},id=cargo \
     RUST_BACKTRACE=1 cargo run
 
 # container image compat hack
-RUN mkdir -p /compat/hack /compat/bin /compat/tmp \
-    && ln -sfv /sysroots/phase1 /compat/hack/toolchain \
-    && ln -sfv /sysroots/phase1/usr/bin/sh /compat/bin/sh
+RUN mkdir -p /compat/bin /compat/tmp \
+    && ln -sfv /toolchain/bin/sh /compat/bin/sh
 
 FROM scratch
-COPY --from=phase1 /sysroots/phase1 /sysroots/phase1
-COPY --from=phase1 /compat/hack/ /
+COPY --from=phase1 /sysroots/phase1 /toolchain
 COPY --from=phase1 /compat/bin /bin
 COPY --from=phase1 /compat/tmp /tmp
 ENV PATH="/toolchain/usr/bin"

@@ -66,12 +66,11 @@ fn clone_repo(
 ///   /toolchain -> .
 fn init_fs_tree(sysroot: &str) -> Result<()> {
     create_dir(format! {"{sysroot}"})?;
-    create_dir(format! {"{sysroot}/phiban"})?;
-    create_dir(format! {"{sysroot}/phiban/sources"})?;
     create_dir(format! {"{sysroot}/etc"})?;
     create_dir(format! {"{sysroot}/usr"})?;
     create_dir(format! {"{sysroot}/usr/bin"})?;
     create_dir(format! {"{sysroot}/usr/lib"})?;
+    create_dir(format! {"{sysroot}/tmp"})?;
     symlink("usr/bin", format! {"{sysroot}/bin"})?;
     symlink("usr/lib", format! {"{sysroot}/lib"})?;
     symlink(".", format! {"{sysroot}/toolchain"})?;
@@ -97,54 +96,63 @@ fn main() -> Result<()> {
     // with all the core libraries setup, we can now build the rest of the
     // system in our new sysroot!
     unsafe {
-        set_var("CFLAGS", format! {"--sysroot={sysroot}"});
-        set_var("CXXFLAGS", format! {"--sysroot={sysroot}"});
+        set_var("CFLAGS", format! {"--sysroot={sysroot} -Oz -march=native"});
+        set_var("CXXFLAGS", format! {"--sysroot={sysroot} -Oz -march=native"});
         set_var("LDFLAGS", format! {"--sysroot={sysroot}"});
+    }
+
+    zlib::build_and_install(sysroot)?;
+    llvm::build_and_install(sysroot)?;
+
+    unsafe {
+        set_var("PATH", format! {"{sysroot}/usr/bin:/toolchain/usr/bin"});
     }
 
     // NOTE: Does pkgconf need to get installed this early? probably not.
     pkgconf::build_and_install(sysroot)?;
 
-    zlib::build_and_install(sysroot)?;
-    bzip2::build_and_install(sysroot)?;
-    xz::build_and_install(sysroot)?;
-    openssl::build_and_install(sysroot)?;
     ncurses::build_and_install(sysroot)?;
     readline::build_and_install(sysroot)?;
-    libffi::build_and_install(sysroot)?;
-    gdbm::build_and_install(sysroot)?;
-    sqlite::build_and_install(sysroot)?;
-    mpdecimal::build_and_install(sysroot)?;
-
-    // We can now swap our linker to use all the newly built libraries and tools
-    remove_file("/toolchain")?;
-    symlink(sysroot, "/toolchain")?;
-    unsafe {
-        set_var("PATH", format! {"/toolchain/usr/bin:/sysroots/phase0/usr/bin"});
-        set_var("CFLAGS", "--sysroot=/toolchain");
-        set_var("CXXFLAGS", "--sysroot=/toolchain");
-        set_var("LDFLAGS", "--sysroot=/toolchain");
-    }
-
-    make::build_and_install(sysroot)?;
     bash::build_and_install(sysroot)?;
-    //perl::build_and_install(sysroot)?;
 
-    // HACK: circular dependency solved by building python twice
-    //
-    //   - util-linux wants libpython (from python)
-    //   - python wants libuuid (from util-linux)
-    python::build_and_install(sysroot)?;
+    // zlib::build_and_install(sysroot)?;
+    // bzip2::build_and_install(sysroot)?;
+    // xz::build_and_install(sysroot)?;
 
-    shadow::build_and_install(sysroot)?;
-    util_linux::build_and_install(sysroot)?;
-    python::build_and_install(sysroot)?;
+    // openssl::build_and_install(sysroot)?;
 
-    cmake::build_and_install(sysroot)?;
-    ninja::build_and_install(sysroot)?;
+    // libffi::build_and_install(sysroot)?;
+    // gdbm::build_and_install(sysroot)?;
+    // sqlite::build_and_install(sysroot)?;
+    // mpdecimal::build_and_install(sysroot)?;
 
-    llvm::build_and_install(sysroot)?;
-    rust::build_and_install(sysroot)?;
+    // // We can now swap our linker to use all the newly built libraries and tools
+    // remove_file("/toolchain")?;
+    // symlink(sysroot, "/toolchain")?;
+    // unsafe {
+    //     set_var("PATH", format! {"/toolchain/usr/bin:/sysroots/phase0/usr/bin"});
+    //     set_var("CFLAGS", "--sysroot=/toolchain");
+    //     set_var("CXXFLAGS", "--sysroot=/toolchain");
+    //     set_var("LDFLAGS", "--sysroot=/toolchain");
+    // }
+
+    // make::build_and_install(sysroot)?;
+    // //perl::build_and_install(sysroot)?;
+
+    // // HACK: circular dependency solved by building python twice
+    // //
+    // //   - util-linux wants libpython (from python)
+    // //   - python wants libuuid (from util-linux)
+    // python::build_and_install(sysroot)?;
+
+    // shadow::build_and_install(sysroot)?;
+    // util_linux::build_and_install(sysroot)?;
+    // python::build_and_install(sysroot)?;
+
+    // cmake::build_and_install(sysroot)?;
+    // ninja::build_and_install(sysroot)?;
+
+    // rust::build_and_install(sysroot)?;
 
     unsafe {
         remove_var("CFLAGS");
